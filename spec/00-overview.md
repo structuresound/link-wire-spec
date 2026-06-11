@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Spec version | 0.1.0-draft |
+| Spec version | 0.1.0 |
 | Upstream reference | Ableton/link @ `902aef95bf94af49746fdda5369b42cdcfa1e6d2` |
 | License | CC-BY-4.0 |
 
@@ -88,9 +88,13 @@ bytes (the reference treats this as a parse failure for the whole containing ite
 | 4 | `N` | bytes | string contents, raw bytes (no NUL terminator, no padding) |
 
 The reference treats strings as opaque byte sequences; no character-set validation is
-performed. OPEN QUESTION: the reference decoder does not visibly bound-check `N`
-against the remaining bytes of the enclosing region before constructing the string;
-implementations MUST treat `N` greater than the remaining byte count as a parse error.
+performed. The reference decoder does not bound-check `N` against the remaining bytes
+of the enclosing region before constructing the string; a hostile `N` larger than the
+available bytes is a memory-safety hazard in a naive port. No string in any captured
+vector exceeds its enclosing region. **Requirement:** implementations MUST treat `N`
+greater than the remaining byte count as a parse error and MUST NOT read past the
+buffer. (Resolved v0.1.0: bound is normative for implementations; not exercised by
+golden vectors, which carry only well-formed strings.)
 
 ### 4.3 Fixed-size arrays
 
@@ -136,8 +140,11 @@ Rules, stated as protocol requirements derived from observed behavior:
 6. Receivers MUST NOT assume any particular entry order. (The reference dispatches
    entries through a key-indexed table.)
 7. Duplicate keys: each occurrence is dispatched in stream order; a later occurrence
-   of the same key overwrites the effect of an earlier one in the reference.
-   OPEN QUESTION: whether emitting duplicates is ever legitimate.
+   of the same key overwrites the effect of an earlier one in the reference
+   (last-one-wins). No message in any captured vector emits a duplicate key.
+   **Requirement:** senders MUST NOT emit duplicate entry keys within one payload;
+   receivers SHOULD apply last-one-wins defensively. (Resolved v0.1.0: duplicates are
+   never legitimate in v1; verified absent across all vectors.)
 
 ### 4.6 Tuples / composite structures
 

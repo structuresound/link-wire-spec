@@ -28,11 +28,11 @@ source) and implementers (who must not).
 
 | Chapter | Scope | Status |
 |---|---|---|
-| [spec/00-overview.md](spec/00-overview.md) | Terminology, transport model, common serialization rules | draft |
-| [spec/01-discovery.md](spec/01-discovery.md) | Multicast peer discovery, peer state gossip | stub |
-| [spec/02-sync.md](spec/02-sync.md) | Timeline, tempo, clock measurement, start/stop sync | stub |
-| [spec/03-audio.md](spec/03-audio.md) | LinkAudio v1: channels, sinks/sources, audio buffers, beat-time alignment | draft |
-| `vectors/` | Captured packet traces (golden test vectors) | pending |
+| [spec/00-overview.md](spec/00-overview.md) | Terminology, transport model, common serialization rules | v0.1.0 |
+| [spec/01-discovery.md](spec/01-discovery.md) | Multicast peer discovery, peer state gossip | v0.1.0 |
+| [spec/02-sync.md](spec/02-sync.md) | Timeline, tempo, clock measurement, start/stop sync | v0.1.0 |
+| [spec/03-audio.md](spec/03-audio.md) | LinkAudio v1: channels, sinks/sources, audio buffers, beat-time alignment | v0.1.0 |
+| [vectors/](vectors/) | Captured packet traces (golden test vectors) | v0.1.0 |
 
 ## Versioning and upstream tracking
 

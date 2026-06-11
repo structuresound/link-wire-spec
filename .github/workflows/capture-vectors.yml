@@ -1,0 +1,68 @@
+name: capture-vectors
+
+# Build the pinned Ableton/link reference and record protocol test vectors.
+# Manual or on changes to the capture rig / pin. Vectors are uploaded as a
+# build artifact; they are committed to the repo only by a maintainer running
+# tools/capture-vectors.sh locally and reviewing the diff (captures are not
+# byte-reproducible — see vectors/README.md).
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - tools/capture-vectors.sh
+      - .github/workflows/capture-vectors.yml
+      - LAST_REVIEWED_SHA
+
+permissions:
+  contents: read
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout spec repo
+        uses: actions/checkout@v4
+
+      - name: Install build and capture dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake g++ git tcpdump jackd2 libjack-jackd2-dev \
+            portaudio19-dev libasound2-dev
+
+      - name: Build reference and record vectors
+        env:
+          # Clone the reference OUTSIDE the workspace so it is never vendored
+          # or accidentally committed (PROVENANCE.md firewall).
+          LINK_CAPTURE_WORK: ${{ runner.temp }}/link-capture
+          LINK_CAPTURE_OUT: ${{ github.workspace }}/vectors
+        run: |
+          # tcpdump on the loopback interface needs elevated privileges; the
+          # GitHub runner provides passwordless sudo. The script itself drives
+          # the reference peers and tcpdump.
+          sudo --preserve-env=LINK_CAPTURE_WORK,LINK_CAPTURE_OUT \
+            bash tools/capture-vectors.sh \
+              discovery-join-leave sync-tempo-change sync-start-stop \
+              audio-channel-lifecycle
+
+      - name: Validate captures parse cleanly
+        run: |
+          sudo apt-get install -y --no-install-recommends tshark
+          fail=0
+          for f in vectors/*.pcap; do
+            frames=$(tshark -r "$f" 2>/dev/null | wc -l)
+            echo "$f: $frames frames"
+            if [ "$frames" -lt 1 ]; then
+              echo "::error::$f has no frames"
+              fail=1
+            fi
+          done
+          exit $fail
+
+      - name: Upload vectors artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: link-wire-vectors
+          path: vectors/*.pcap
+          if-no-files-found: error

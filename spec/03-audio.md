@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Spec version | 0.1.0-draft |
+| Spec version | 0.1.0 |
 | Upstream reference | Ableton/link @ `902aef95bf94af49746fdda5369b42cdcfa1e6d2` |
 | License | CC-BY-4.0 |
 
@@ -94,9 +94,14 @@ Receiver admission rules (observed, stated as requirements):
 | Maximum name size | 256 | peer and channel name byte limit (see §8) |
 
 Note the 4-byte discrepancy: the on-wire fixed prefix is 20 bytes, but the reference
-budgets 24, so the effective payload never exceeds 1176 bytes even though 1180 would
-fit. Interoperating senders SHOULD apply the 1176-byte payload budget.
-OPEN QUESTION: whether any receiver enforces an upper payload bound of 1176 vs 1180.
+budgets 24, so the effective payload it *emits* never exceeds 1176 bytes even though
+1180 would fit. Interoperating senders SHOULD apply the 1176-byte payload budget.
+
+**Resolved (v0.1.0):** the receive path applies **no** payload ceiling check; an
+incoming datagram is bounded only by the receive socket buffer, which is the
+1200-byte maximum message size (i.e. up to 1180 bytes of payload). The 24-byte budget
+is purely sender-side conservatism. Receivers MUST accept payloads up to 1180 bytes;
+senders SHOULD stay within 1176.
 
 ### 3.2 Message types
 
@@ -204,8 +209,9 @@ Unlike all control messages, the audio payload is **not** wrapped in a payload
 container: the structure below begins directly at message offset 20, with no
 key/size prefix. The fourcc `_abu` = `0x5f616275` is associated with this structure
 as a constant in the reference, but is not written on the wire by the v1 encoding
-path. OPEN QUESTION: confirm by pcap that no `_abu` entry header precedes the
-structure in traffic from shipping implementations.
+path. **Resolved (v0.1.0):** confirmed by `vectors/audio-channel-lifecycle.pcap` —
+every AudioBuffer datagram's payload begins directly with the 8-byte channel id; no
+`_abu` (`5f 61 62 75`) entry header precedes the structure.
 
 ### 5.2 Payload layout
 
@@ -264,9 +270,13 @@ Receiver validation (observed): codec 0 → reject the buffer. For codec 1 the r
 additionally checks `total_frames × numChannels × 2 == numBytes` and rejects on
 mismatch. Codec values other than 0 and 1 are *accepted by the parser*; the reference
 then decodes the sample data as if it were PCM i16 (it has no other decoder and does
-not re-check the codec). OPEN QUESTION: implementations should probably discard
-buffers with unknown codec values instead; confirm intended behavior before relying
-on this for format negotiation.
+not re-check the codec). **Resolved (v0.1.0):** this is confirmed reference behavior;
+all AudioBuffers in `vectors/audio-channel-lifecycle.pcap` use `codec = 1`, and no
+codec other than 1 is ever transmitted. Because the codec field cannot currently be
+used for format negotiation (an unknown value is silently mis-decoded), implementations
+SHOULD reject buffers whose codec is neither 0 nor 1 rather than imitate the
+reference's fall-through. Codec values remain a v1 extension point reserved for a
+future spec version.
 
 ### 5.5 Sample encoding (codec 1)
 
@@ -291,7 +301,12 @@ With the 502-byte cap, a stereo 48 kHz stream is sent as ≈ 125-frame datagrams
 Note: the fixed non-chunk fields total 28 bytes and each chunk adds 26, so the actual
 minimum non-audio overhead with one chunk is 54 bytes, not 50; the reference's chunk
 bookkeeping dynamically subtracts the real chunk-list size when computing how many
-frames fit. OPEN QUESTION: the exact derivation of the constant 50.
+frames fit. **Resolved (v0.1.0):** the value 50 is a **hand-chosen fixed allowance**,
+not a computed minimum — it is intentionally loose headroom for the non-sample fields,
+and the encoder subtracts the *actual* chunk-list size at runtime, so correctness does
+not depend on 50 being exact. Implementations need not reproduce the constant 50; they
+need only ensure each datagram's total size stays within the message limit. The
+constant matters only as the basis for the capacity figures below.
 
 ### 5.7 Transmission conditions
 
@@ -454,9 +469,12 @@ beginBeats, tempo, count, sessionId, sampleRate, numChannels) unit.
 - Names are length-prefixed strings (Chapter 0 §4.2), opaque bytes, no terminator.
 - Names are display-only and may change over the lifetime of a peer/channel; the
   8-byte identifiers are the stable keys.
-- OPEN QUESTION: the receive path has no observed length check; behavior of shipping
-  receivers when presented with names longer than 256 bytes is unverified (the
-  payload budget caps a single name at well under 1176 bytes regardless).
+- **Resolved (v0.1.0):** the 256-byte cap is **sender-side only** (the public API
+  truncates before transmit). The receive path applies no name-length check: a name is
+  decoded as a length-prefixed string (Chapter 0 §4.2) bounded only by the enclosing
+  payload. A receiver therefore accepts names longer than 256 bytes, up to the payload
+  budget. Implementations MAY impose their own display-length cap but MUST parse the
+  full length-prefixed field to stay byte-aligned with the rest of the payload.
 
 ## 9. Forward-compatibility behavior (observed in the reference)
 
@@ -470,7 +488,7 @@ beginBeats, tempo, count, sessionId, sampleRate, numChannels) unit.
 | Recognized entry not consuming exactly its declared size | parse error, message dropped |
 | AudioBuffer with zero chunks | rejected |
 | AudioBuffer with codec 0 | rejected |
-| AudioBuffer with unknown nonzero codec | parsed and decoded as PCM i16 (no dedicated check); see §5.4 OPEN QUESTION |
+| AudioBuffer with unknown nonzero codec | parsed and decoded as PCM i16 (no dedicated check); implementations SHOULD reject — see §5.4 |
 | AudioBuffer where remaining bytes ≠ `numBytes` | rejected |
 | Malformed announcement / request payloads | message logged and ignored |
 
@@ -501,20 +519,32 @@ beginBeats, tempo, count, sessionId, sampleRate, numChannels) unit.
 
 ## 11. Open questions (tracking list)
 
-1. **OPEN QUESTION:** `_abu` (`0x5f616275`) is defined as the audio-buffer key but the
-   v1 encoder writes the structure bare, with no payload-entry wrapper — verify by
-   pcap.
-2. **OPEN QUESTION:** header budget 24 vs actual 20-byte header — do receivers
-   enforce a 1176- or 1180-byte payload ceiling?
-3. **OPEN QUESTION:** exact derivation of the 50-byte non-audio allowance (computed
-   minimum with one chunk is 54).
-4. **OPEN QUESTION:** receiver behavior for names longer than 256 bytes.
-5. **OPEN QUESTION:** intended handling of unknown nonzero codec values (reference
-   parses them and decodes as PCM i16).
-6. **OPEN QUESTION:** semantics of nonzero `groupId` (reserved field; reference sends
-   0 and drops everything else).
-7. **OPEN QUESTION:** whether duplicate payload-container entries are ever legitimate
-   (reference applies last-one-wins).
-8. **OPEN QUESTION:** cross-host usability of advertised IPv6 (`aep6`) addresses
-   given that scope ids are not transmitted (receiver substitutes its own interface
-   scope) — verify with v6-only pcap.
+Resolved at v0.1.0 (see CHANGELOG for the per-question verdict):
+
+1. **Resolved** — `_abu` is **not** written on the wire; AudioBuffer payloads begin
+   bare with the channel id. Confirmed by `vectors/audio-channel-lifecycle.pcap`.
+   See §5.1.
+2. **Resolved** — receivers enforce **no** payload ceiling beyond the 1200-byte
+   socket buffer (≤1180 payload); the 24-byte budget is sender-side only. See §3.1.
+3. **Resolved** — the 50-byte allowance is a hand-chosen fixed constant, not a
+   computed minimum; the encoder subtracts the real chunk-list size at runtime.
+   See §5.6.
+4. **Resolved** — the 256-byte name cap is sender-side only; receivers accept longer
+   names (length-prefixed, bounded by the payload). See §8.
+5. **Resolved** — the reference parses unknown nonzero codecs and decodes them as
+   PCM i16; only codec 1 is ever transmitted. Implementations SHOULD reject unknown
+   codecs. See §5.4.
+6. **Resolved** — `groupId` is a reserved field; the reference sends 0 and drops any
+   nonzero value. All captured traffic uses `groupId = 0`. Implementations MUST send 0
+   and MUST ignore messages with a nonzero `groupId`. See §3 and §9.
+7. **Resolved** — duplicate payload-container entries are never emitted; receivers
+   apply last-one-wins. Senders MUST NOT emit duplicates. See Chapter 0 §4.5 rule 7.
+
+Deferred:
+
+8. **OPEN QUESTION:** cross-host usability of advertised IPv6 (`aep6`) addresses given
+   that scope ids are not transmitted (receiver substitutes its own interface scope).
+   Requires the `discovery-ipv6.pcap` vector, which the v0.1.0 capture environment
+   could not produce (no interface with both IPv4 and link-local IPv6). The capture
+   script emits this vector automatically where such an interface exists; the question
+   is carried forward to the next release.
