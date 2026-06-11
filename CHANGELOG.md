@@ -48,6 +48,16 @@ per-scenario structural assertions in `tools/check_vectors.py` before release.
   `tools/check_vectors.py` (structural assertions), with CI workflows
   `capture-vectors.yml` and `upstream-watch.yml`. Reference source is cloned
   outside the repo and never vendored.
+- **Conformance harness** (`conformance/`, MIT): drives a reference peer and a
+  candidate (any program speaking `CANDIDATE-CONTRACT.md`) through the
+  vector scenarios — discovery join/leave, tempo follow, start/stop, beat
+  phase alignment, audio announce→subscribe→stream→bye — emitting pass/fail
+  observations as plain text. Contains no protocol logic (assertions are on
+  observable endpoint behavior only); self-tests reference-vs-reference in CI
+  (`conformance-selftest.yml`); ships an example workflow for candidate
+  repositories. Homed in this repo so the dirty-side-authored harness stays
+  behind the release gate; the clean side consumes it from a release tag
+  (PROVENANCE.md firewall item 2).
 
 ### Open-question verdicts
 

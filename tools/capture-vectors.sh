@@ -44,21 +44,8 @@ log() { echo "[capture] $*" >&2; }
 # ---------------------------------------------------------------- build
 
 build_reference() {
-  if [ ! -x "$BIN/LinkHutSilent" ] || [ ! -x "$BIN/LinkAudioHut" ]; then
-    log "cloning reference at $PIN"
-    if [ ! -d "$SRC/.git" ]; then
-      git clone "$UPSTREAM_URL" "$SRC"
-    fi
-    git -C "$SRC" fetch origin "$PIN" || true
-    git -C "$SRC" checkout --force "$PIN"
-    git -C "$SRC" submodule update --init --recursive
-    log "building LinkHutSilent + LinkAudioHut (JACK audio platform)"
-    cmake -S "$SRC" -B "$SRC/build" -DCMAKE_BUILD_TYPE=Release \
-      -DLINK_BUILD_JACK=ON -DLINK_BUILD_TESTS=OFF >/dev/null
-    cmake --build "$SRC/build" --target LinkHutSilent LinkAudioHut \
-      -j"$(nproc)" >/dev/null
-  fi
-  log "reference binaries ready: $BIN"
+  BIN=$(LINK_CAPTURE_WORK="$WORK" LINK_UPSTREAM_URL="$UPSTREAM_URL" \
+    "$REPO_DIR/tools/build-reference.sh")
 }
 
 # ---------------------------------------------------------------- peers

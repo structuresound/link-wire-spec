@@ -40,7 +40,7 @@ in doubt, express the fact as a table, equation, or state machine.
 |---|---|---|
 | Spec text (`spec/`) | CC-BY-4.0 | facts only, per the rules above |
 | Test vectors (`vectors/`) | CC0 | packet captures of reference peers; protocol facts |
-| Tooling (workflows, capture scripts) | MIT | |
+| Tooling (workflows, capture scripts, conformance harness) | MIT | the harness (`conformance/`) contains no protocol logic: it asserts on observable endpoint behavior only |
 
 Reference binaries are built from upstream in CI for capture and conformance
 purposes and are never redistributed from this repository.
@@ -50,8 +50,12 @@ purposes and are never redistributed from this repository.
 Implementations claiming clean-room provenance from this spec may use ONLY:
 
 1. Released versions of this specification and its test vectors.
-2. Conformance-harness results phrased as observations (pass/fail,
-   measured behavior) — never as reference-source diffs.
+2. The released conformance harness (`conformance/`) — which the clean side
+   may execute against its candidate, fetching this repository at a release
+   tag into CI caches only (never vendoring it) — and the harness's results
+   phrased as observations (pass/fail, measured behavior) — never as
+   reference-source diffs. The harness is authored on the dirty side and is
+   releasable because it contains no protocol implementation logic.
 3. Public non-GPL documentation (the Goltz paper, Ableton's public help
    pages and FAQ).
 

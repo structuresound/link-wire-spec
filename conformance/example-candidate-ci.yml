@@ -1,0 +1,66 @@
+# Example workflow for a CANDIDATE repository (e.g. link-wire-rs):
+# run the link-wire-spec conformance harness against the candidate binary.
+#
+# Copy into .github/workflows/ of the candidate repo (after review) and adjust
+# the two CUSTOMIZE points. The spec repo — and the GPL reference it builds —
+# live only in the runner's temp directory and caches, never in the candidate
+# repo's tree or artifacts (clean-room firewall; see the spec repo's
+# PROVENANCE.md).
+#
+# License: MIT
+
+name: conformance
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  SPEC_REPO: structuresound/link-wire-spec
+  SPEC_REF: v0.1.0 # pin the released spec version the candidate targets
+
+jobs:
+  conformance:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout candidate
+        uses: actions/checkout@v4
+
+      # CUSTOMIZE: build your candidate and its contract-speaking executable
+      - name: Build candidate
+        run: |
+          cargo build --release --bin conformance-peer
+
+      - name: Fetch spec + harness at pinned release (outside the workspace)
+        run: |
+          git clone --depth 1 --branch "$SPEC_REF" \
+            "https://github.com/$SPEC_REPO.git" "$RUNNER_TEMP/link-wire-spec"
+
+      - name: Install harness dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake g++ git iproute2 util-linux python3 \
+            jackd2 libjack-jackd2-dev portaudio19-dev libasound2-dev
+
+      - name: Run conformance harness
+        env:
+          # CUSTOMIZE: how to run your candidate (CANDIDATE-CONTRACT.md) and
+          # which optional features it declares ("" or "audio")
+          CANDIDATE_CMD: ${{ github.workspace }}/target/release/conformance-peer
+          CANDIDATE_FEATURES: ""
+          LINK_CAPTURE_WORK: ${{ runner.temp }}/link-reference
+        run: |
+          sudo --preserve-env=CANDIDATE_CMD,CANDIDATE_FEATURES,LINK_CAPTURE_WORK \
+            bash "$RUNNER_TEMP/link-wire-spec/conformance/run-isolated.sh" \
+            | tee conformance-observations.txt
+
+      - name: Upload observation log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: conformance-observations
+          path: conformance-observations.txt

@@ -33,6 +33,7 @@ source) and implementers (who must not).
 | [spec/02-sync.md](spec/02-sync.md) | Timeline, tempo, clock measurement, start/stop sync | v0.1.0 |
 | [spec/03-audio.md](spec/03-audio.md) | LinkAudio v1: channels, sinks/sources, audio buffers, beat-time alignment | v0.1.0 |
 | [vectors/](vectors/) | Captured packet traces (golden test vectors) with auto-generated observed-fact manifests | v0.1.0 |
+| [conformance/](conformance/) | Conformance harness: reference-vs-candidate scenarios emitting pass/fail observations; no protocol logic | v0.1.0 |
 
 Every claim in the spec carries an evidence class (Chapter 0 §1.1): wire-observed
 in a vector, behavioral (reference analysis), or normative. Observable facts about
