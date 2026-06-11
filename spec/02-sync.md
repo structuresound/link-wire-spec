@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Spec version | 0.1.0 |
+| Spec version | 0.4.0 |
 | Upstream reference | Ableton/link @ `902aef95bf94af49746fdda5369b42cdcfa1e6d2` |
 | License | CC-BY-4.0 |
 
@@ -274,12 +274,21 @@ On joining: adopt the foreign `(sessionId, timeline, G)`, reset start/stop state
 (§8), and gossip the new membership immediately (Chapter 1 §4.1). Timelines of a
 joined session are then maintained per §6 rule 2.
 
+After a join, the abandoned session is **retained** in the set of known sessions
+together with its measurement, so re-encountering it in gossip does not trigger a
+fresh measurement [B]. Cached foreign sessions' timelines are kept current under the
+same beat-origin priority rule as the current session's (§6 rule 2) [B].
+
 ### 7.3 Re-measurement and loss of peers
 
-- The current session's ghost transform is **re-measured every 30 seconds**
-  (against the founder or another member, as in §7.1); a failed re-measurement
-  schedules another attempt 30 s later [B]. This bounds clock drift between session
-  members (slope is fixed at 1, so drift appears as a slowly changing offset).
+- A peer that has **joined** a foreign session re-measures that session's ghost
+  transform every **30 seconds** (target chosen as in §7.1); each pass re-arms the
+  timer, and a failed re-measurement of the current session schedules another
+  attempt 30 s later rather than abandoning the session [B]. A peer still in the
+  session it founded does not re-measure it — its transform is exact by
+  construction; the joining members are the measuring side [B]. This bounds clock
+  drift between session members (slope is fixed at 1, so drift appears as a slowly
+  changing offset).
 - When the last other member of the session disappears (Chapter 1 §7), the peer
   **founds a fresh session**: new random NodeId, sessionId = NodeId, new transform
   `(1, −now)`, and a new timeline constructed so the local beat/tempo continue

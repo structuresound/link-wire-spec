@@ -105,8 +105,12 @@ one-gateway-per-interface model).
 
 ### `discovery-ipv6` — not yet captured
 
-The IPv6 link-local variant of discovery. The capture environment's kernel has no
-IPv6 support, so this vector could not be produced (the capture script detects
-support and emits it automatically where present). Chapter 3's open question 8
-(cross-host usability of advertised `aep6` endpoints, given scope ids are not
-transmitted) remains open pending this capture.
+The IPv6 link-local variant of discovery. Neither the v0.1.0 nor the v0.4.0 capture
+environment's kernel has IPv6 support, so this vector has not been produced (the
+capture script detects support and emits it automatically where present). Chapter
+3's question 8 (cross-host usability of advertised `aep6` endpoints, given scope
+ids are not transmitted) was **resolved [B] at v0.4.0** by reference analysis —
+advertised v6 endpoints are always link-local addresses of the sending gateway, so
+the receiver's scope substitution is correct by construction on the shared link.
+This capture would raise that verdict's evidence class to [W] but is no longer
+required to answer the question.
