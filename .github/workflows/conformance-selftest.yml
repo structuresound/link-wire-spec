@@ -1,0 +1,46 @@
+name: conformance-selftest
+
+# Validate the conformance harness end-to-end by running it in self-test mode
+# (reference vs reference): builds the pinned reference into the runner's
+# temp dir (never the workspace), runs every scenario in an isolated network
+# namespace, and fails on any failed observation.
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - conformance/**
+      - tools/build-reference.sh
+      - .github/workflows/conformance-selftest.yml
+      - LAST_REVIEWED_SHA
+
+permissions:
+  contents: read
+
+jobs:
+  selftest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout spec repo
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake g++ git iproute2 util-linux python3 \
+            jackd2 libjack-jackd2-dev portaudio19-dev libasound2-dev
+
+      - name: Run harness self-test (reference vs reference)
+        env:
+          LINK_CAPTURE_WORK: ${{ runner.temp }}/link-reference
+        run: |
+          sudo --preserve-env=LINK_CAPTURE_WORK \
+            bash conformance/run-isolated.sh | tee observations.txt
+
+      - name: Upload observation log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: selftest-observations
+          path: observations.txt
