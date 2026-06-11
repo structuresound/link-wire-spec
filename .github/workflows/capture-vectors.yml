@@ -1,9 +1,12 @@
 name: capture-vectors
 
-# Build the pinned Ableton/link reference and record protocol test vectors.
-# Manual or on changes to the capture rig / pin. Vectors are uploaded as a
-# build artifact; they are committed to the repo only by a maintainer running
-# tools/capture-vectors.sh locally and reviewing the diff (captures are not
+# Build the pinned Ableton/link reference and record protocol test vectors in
+# isolated network namespaces. The capture script generates an observed-fact
+# manifest per vector (tools/analyze_pcap.py) and fails if any capture does
+# not structurally contain the events its scenario demonstrates
+# (tools/check_vectors.py). Vectors are uploaded as a build artifact; they are
+# committed to the repo only by a maintainer running tools/capture-vectors.sh
+# locally and reviewing pcaps + manifests together (captures are not
 # byte-reproducible — see vectors/README.md).
 
 on:
@@ -11,6 +14,8 @@ on:
   push:
     paths:
       - tools/capture-vectors.sh
+      - tools/analyze_pcap.py
+      - tools/check_vectors.py
       - .github/workflows/capture-vectors.yml
       - LAST_REVIEWED_SHA
 
@@ -28,41 +33,28 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            cmake g++ git tcpdump jackd2 libjack-jackd2-dev \
-            portaudio19-dev libasound2-dev
+            cmake g++ git tcpdump iproute2 util-linux python3 \
+            jackd2 libjack-jackd2-dev portaudio19-dev libasound2-dev
 
-      - name: Build reference and record vectors
+      - name: Build reference, record vectors, generate manifests, assert structure
         env:
           # Clone the reference OUTSIDE the workspace so it is never vendored
           # or accidentally committed (PROVENANCE.md firewall).
           LINK_CAPTURE_WORK: ${{ runner.temp }}/link-capture
           LINK_CAPTURE_OUT: ${{ github.workspace }}/vectors
         run: |
-          # tcpdump on the loopback interface needs elevated privileges; the
-          # GitHub runner provides passwordless sudo. The script itself drives
-          # the reference peers and tcpdump.
+          # netns isolation (unshare --net) and tcpdump need root; the runner
+          # provides passwordless sudo. Manifest generation and the structural
+          # assertions run inside the script and fail the job on a hollow
+          # capture.
           sudo --preserve-env=LINK_CAPTURE_WORK,LINK_CAPTURE_OUT \
-            bash tools/capture-vectors.sh \
-              discovery-join-leave sync-tempo-change sync-start-stop \
-              audio-channel-lifecycle
-
-      - name: Validate captures parse cleanly
-        run: |
-          sudo apt-get install -y --no-install-recommends tshark
-          fail=0
-          for f in vectors/*.pcap; do
-            frames=$(tshark -r "$f" 2>/dev/null | wc -l)
-            echo "$f: $frames frames"
-            if [ "$frames" -lt 1 ]; then
-              echo "::error::$f has no frames"
-              fail=1
-            fi
-          done
-          exit $fail
+            bash tools/capture-vectors.sh
 
       - name: Upload vectors artifact
         uses: actions/upload-artifact@v4
         with:
           name: link-wire-vectors
-          path: vectors/*.pcap
+          path: |
+            vectors/*.pcap
+            vectors/manifests/*.md
           if-no-files-found: error

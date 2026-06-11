@@ -13,7 +13,10 @@ implementation. For the rationale of the algorithms standardized here, see F. Go
 Linux Audio Conference 2018 (cited below as [Goltz 2018]); that paper is public and
 non-GPL.
 
-All encodings use the common serialization rules of Chapter 0 §4.
+All encodings use the common serialization rules of Chapter 0 §4. Claims are tagged
+with the evidence classes of Chapter 0 §1.1 ([W] wire-observed / [B] behavioral /
+[N] normative); every vector under `vectors/` contains sync measurement traffic,
+with per-capture facts in `vectors/manifests/`.
 
 ---
 
@@ -114,11 +117,16 @@ one well-formed payload container. The echo is what lets the initiator recover i
 own send time (`__ht`) and the previous ghost time (`_pgt`) without keeping
 per-ping state.
 
-Observed datagram sizes: first ping 25 bytes (9 + 16), its pong 57 (9 + 32 + 16);
-subsequent pings 41 (9 + 32), pongs 73 (9 + 32 + 32). See vector
-`discovery-join-leave.pcap`.
+Datagram sizes and entry shapes [W]: first ping 25 bytes (9 + 16) with `{__ht}`,
+its pong 57 (9 + 32 + 16) with `{sess, __gt}` + echo; subsequent pings 41 (9 + 32)
+with `{__ht, _pgt}`, pongs 73 (9 + 32 + 32). All four shapes are pinned in every
+discovery vector's manifest ("Sync message shapes") and asserted by
+`tools/check_vectors.py`.
 
 ### 4.2 Initiator behavior
+
+All [B] except as noted; the resulting message shapes and the ~104-ping chain per
+measurement are [W] in every discovery vector.
 
 - Send the first ping immediately with `{__ht = now}`.
 - On each valid pong for the current measurement, *immediately* send the next ping
@@ -135,9 +143,10 @@ subsequent pings 41 (9 + 32), pongs 73 (9 + 32 + 32). See vector
 A responder MUST answer any Ping whose payload is at most **32 bytes** (the size of
 a `__ht` + `_pgt` container) with a Pong to the datagram's source endpoint,
 containing its current session id (`sess`), its current ghost time (`__gt =
-G(now)`), and the verbatim ping payload appended. Pings with larger payloads are
-ignored. The responder is stateless and answers every valid ping, regardless of
-session membership.
+G(now)`), and the verbatim ping payload appended [W: pong = 32 bytes of own entries
++ exact echo, visible in all vectors]. Pings with larger payloads are ignored [B].
+The responder is stateless and answers every valid ping, regardless of session
+membership [B].
 
 ## 5. Offset estimation and filtering
 
@@ -169,9 +178,10 @@ G = (slope = 1, intercept = round(median(samples)))
 ```
 
 The median across the whole chain discards outliers from asymmetric or delayed
-round trips ([Goltz 2018]). Implementations MAY use a different robust
-estimator; the wire format does not constrain the filter, only the message
-exchange.
+round trips ([Goltz 2018]). The sampling formulas, the >100 threshold, and the
+median are [B] — the filter runs inside the initiator and leaves no distinct wire
+trace beyond the chain length. Implementations MAY use a different robust estimator
+[N]; the wire format does not constrain the filter, only the message exchange.
 
 ## 6. The session timeline (`tmln`)
 
@@ -190,20 +200,22 @@ beats(g) = beatOrigin + (g − timeOrigin) / microsPerBeat
 ghost(b) = timeOrigin + (b − beatOrigin) · microsPerBeat
 ```
 
-Rules, stated as protocol requirements derived from observed behavior:
+Rules, stated as protocol requirements derived from reference behavior:
 
 1. **Tempo range:** tempo values outside 20–999 bpm are clamped by receivers into
-   that range. (Senders also clamp; the µs/beat encoding makes exact bpm values
+   that range [B]. (Senders also clamp; the µs/beat encoding makes exact bpm values
    slightly lossy — e.g. 999 bpm → 60060 µs/beat → 999.000999… bpm — so receivers
    re-clamp after decoding.)
 2. **Beat-origin priority:** within a session, a received timeline **replaces** the
    currently held one iff its `beatOrigin` is **strictly greater**. Otherwise it is
-   ignored. The beat origin thus acts as a logical clock / priority stamp for
+   ignored [B]. The beat origin thus acts as a logical clock / priority stamp for
    timeline modifications.
 3. **Modification rule:** a peer changing the session timeline (tempo change or beat
    re-anchor) MUST emit a timeline whose `beatOrigin` exceeds the current one. The
    reference uses `max(beats-at-now-on-old-timeline, old beatOrigin + 1 µbeat)`,
-   keeping the origin near the present so priority roughly tracks recency.
+   keeping the origin near the present so priority roughly tracks recency. [W:
+   `sync-tempo-change.pcap` — its manifest shows each tempo change gossiped with a
+   strictly increased beatOrigin, asserted by `check_vectors.py`.]
 4. **Beat 0 is the phase reference:** the time origin is the ghost time of beat
    `beatOrigin`; the ghost time of beat 0, `ghost(0)`, anchors every peer's quantum
    grid (§9). Timeline changes preserve this anchoring.
@@ -249,8 +261,14 @@ That is: **the session with the greater ghost time wins** — ghost time measure
 long a session has existed, so newcomers always join the older, established session
 ([Goltz 2018]) — with the byte-wise lesser session id as tie-breaker when the
 ghost times are within ε of each other. If the rule does not fire, the peer stays
-and the foreign session remains cached with its measurement; because *both* sides
-evaluate the same rule, exactly one side joins the other.
+and the foreign session remains cached with its measurement.
+
+Both sides evaluate the same rule on **independently measured** ghost-time
+differences, which are noisy. Away from the ±ε boundary the two evaluations are
+anti-symmetric and exactly one side joins; near the boundary, measurement noise can
+transiently make both or neither side join. Convergence is still guaranteed: the
+post-join membership is re-gossiped immediately, surviving disagreement re-triggers
+measurement, and the id tie-break is deterministic [B].
 
 On joining: adopt the foreign `(sessionId, timeline, G)`, reset start/stop state
 (§8), and gossip the new membership immediately (Chapter 1 §4.1). Timelines of a
@@ -260,12 +278,14 @@ joined session are then maintained per §6 rule 2.
 
 - The current session's ghost transform is **re-measured every 30 seconds**
   (against the founder or another member, as in §7.1); a failed re-measurement
-  schedules another attempt 30 s later. This bounds clock drift between session
+  schedules another attempt 30 s later [B]. This bounds clock drift between session
   members (slope is fixed at 1, so drift appears as a slowly changing offset).
 - When the last other member of the session disappears (Chapter 1 §7), the peer
   **founds a fresh session**: new random NodeId, sessionId = NodeId, new transform
   `(1, −now)`, and a new timeline constructed so the local beat/tempo continue
-  seamlessly.
+  seamlessly. [W: in `discovery-join-leave.pcap` the surviving peer reappears under
+  a new NodeId after the other's ByeBye — three NodeIds for two processes in the
+  manifest.]
 
 ### 7.4 Election state machine (per peer)
 
@@ -290,7 +310,9 @@ The 17-byte `stst` payload value (Chapter 1 §6) is, in order:
 | 1 | 8 | `i64` | beats: the session-timeline beat position at which the transport starts/stopped, in µbeats |
 | 9 | 8 | `i64` | timestamp: ghost time of the user action that produced this state, in µs |
 
-Propagation rules (observed, stated as requirements):
+Propagation rules (reference behavior [B] unless noted, stated as requirements; the
+encoding and both transport states on the wire are [W] in `sync-start-stop.pcap`,
+asserted by `check_vectors.py`):
 
 1. A received `stst` is considered only if the same message's `sess` matches the
    receiver's current session.
@@ -310,19 +332,22 @@ informational for relays.
 
 ## 9. Quantum, phase, and the session beat grid
 
-These functions are shared with Chapter 3 §6 and reproduced here as the normative
-definition. All values in beats (µbeats on the wire); `q > 0` is the local quantum.
+These equations are shared with Chapter 3 §6 and given here as the normative
+definition [B: beat-grid arithmetic of the reference; its session-grid consequences
+are [W] in the audio vectors]. All values in beats (µbeats on the wire); `q > 0` is
+the local quantum. The two alignment operations are written `alignUp` and
+`alignNear` in this specification.
 
 ```
-phase(b, q)               = b mod q, shifted into [0, q) (negative b handled by
-                            adding a sufficient whole multiple of q before the mod;
-                            phase(b, 0) = 0)
+phase(b, q)        = b mod q, shifted into [0, q) (negative b handled by adding a
+                     sufficient whole multiple of q before the mod; phase(b, 0) = 0)
 
-nextPhaseMatch(x, t, q)   = x + ((phase(t,q) − phase(x,q) + q) mod q)
-                            least value ≥ x having the phase of t
+alignUp(x, t, q)   = x + ((phase(t,q) − phase(x,q) + q) mod q)
+                     least value ≥ x having the phase of t
 
-closestPhaseMatch(x,t,q)  = nextPhaseMatch(x − q/2, t, q)
-                            value with t's phase nearest to x (deviation ≤ q/2)
+alignNear(x, t, q) = alignUp(x − q/2, t, q)
+                     value with t's phase nearest to x (deviation ≤ q/2;
+                     ties at exactly q/2 resolve downward)
 ```
 
 Beat 0 of the session timeline is the origin of every peer's quantum grid: a peer
@@ -332,14 +357,24 @@ multiples, and the beat value a peer reports to its application for time `t` is
 phase-encoded against its own quantum:
 
 ```
-b_app(t) = closestPhaseMatch(B(t), B(t) − beatOrigin, q)
+b_app(t) = alignNear(B(t), B(t) − beatOrigin, q)
            where B(t) = beats(G(t))     (§6 bijection)
 ```
 
-The inverse mapping (application beat → time) inverts the phase encoding with
-rounding *up* at exactly `q/2` so that the two directions compose. Chapter 3 §6
-builds the origin-independent "session beat time" used by LinkAudio from the same
-construction.
+The inverse mapping (application beat `b` → time) must invert the phase encoding
+with the *opposite* tie-break — rounding up at exactly `q/2` — or the two directions
+do not compose. The reference computes it as follows [B], and implementations MUST
+reproduce the tie-break behavior [N]:
+
+```
+r        = b − beatOrigin
+cycle    = r − phase(r, q)                       (start of r's quantum cycle)
+δ        = alignNear(q − phase(r, q), q − phase(b, q), q)
+t_app(b) = ghost⁻¹(time(beatOrigin + cycle + q − δ))    (§6 bijection, then G⁻¹)
+```
+
+Chapter 3 §6 builds the origin-independent "session beat time" used by LinkAudio
+from the same construction.
 
 ## 10. Relationship of host, ghost, and client time
 

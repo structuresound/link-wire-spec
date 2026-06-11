@@ -1,0 +1,126 @@
+name: upstream-watch
+
+# Weekly comparison of Ableton/link HEAD against the reviewed pin
+# (LAST_REVIEWED_SHA). If no new upstream commit touches wire-relevant paths,
+# the pin advances automatically. Otherwise a triage issue is opened (or
+# updated) listing the new commits and the wire-relevant paths they touch, so
+# a dirty-side author can classify each change (no wire impact / behavioral /
+# wire-format) per PROVENANCE.md.
+#
+# Provenance note: the issue body contains only commit SHAs, dates, and file
+# paths — no upstream commit messages, code, or comments.
+
+on:
+  schedule:
+    - cron: "17 6 * * 1" # weekly, Monday 06:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+
+env:
+  UPSTREAM: https://github.com/Ableton/link.git
+  # Paths in the upstream repo considered wire-relevant. Conservative: the
+  # whole library (protocol logic AND platform socket configuration both
+  # produce wire-visible behavior). Examples, docs, CI, and build files are
+  # not wire-relevant by themselves.
+  RELEVANT_GLOB: "include/ableton/"
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout spec repo
+        uses: actions/checkout@v4
+
+      - name: Compare upstream HEAD against pin
+        id: cmp
+        run: |
+          set -euo pipefail
+          PIN=$(tr -d '[:space:]' < LAST_REVIEWED_SHA)
+          git clone --bare --filter=blob:none "$UPSTREAM" /tmp/upstream
+          HEAD=$(git -C /tmp/upstream rev-parse HEAD)
+          echo "pin=$PIN" >> "$GITHUB_OUTPUT"
+          echo "head=$HEAD" >> "$GITHUB_OUTPUT"
+          if [ "$PIN" = "$HEAD" ]; then
+            echo "status=current" >> "$GITHUB_OUTPUT"
+            echo "Pin is current ($PIN)." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if ! git -C /tmp/upstream merge-base --is-ancestor "$PIN" "$HEAD"; then
+            echo "status=diverged" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          RELEVANT=$(git -C /tmp/upstream diff --name-only "$PIN" "$HEAD" \
+            | grep "^$RELEVANT_GLOB" || true)
+          {
+            echo "commits<<EOF"
+            git -C /tmp/upstream log --format='%H %as' "$PIN..$HEAD"
+            echo "EOF"
+            echo "relevant<<EOF"
+            echo "$RELEVANT"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          if [ -z "$RELEVANT" ]; then
+            echo "status=advance" >> "$GITHUB_OUTPUT"
+          else
+            echo "status=triage" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Advance pin (no wire-relevant changes)
+        if: steps.cmp.outputs.status == 'advance'
+        run: |
+          set -euo pipefail
+          echo "${{ steps.cmp.outputs.head }}" > LAST_REVIEWED_SHA
+          git config user.name "upstream-watch"
+          git config user.email "actions@users.noreply.github.com"
+          git add LAST_REVIEWED_SHA
+          git commit -m "upstream-watch: advance pin to ${{ steps.cmp.outputs.head }}
+
+          No commit in ${{ steps.cmp.outputs.pin }}..${{ steps.cmp.outputs.head }}
+          touches wire-relevant paths (include/ableton/)."
+          git push
+          echo "Pin advanced to ${{ steps.cmp.outputs.head }} (no wire-relevant changes)." \
+            >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Open or update triage issue (wire-relevant changes)
+        if: steps.cmp.outputs.status == 'triage'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TITLE="upstream triage: ${{ steps.cmp.outputs.pin }}..${{ steps.cmp.outputs.head }}"
+          BODY=$(cat <<'EOF'
+          Upstream `Ableton/link` has moved past the reviewed pin and the diff
+          touches wire-relevant paths. Per PROVENANCE.md, classify each commit:
+          *no wire impact* (advance pin), *behavioral change* (spec errata +
+          regenerate vectors), or *wire-format change* (chapter revision + spec
+          version bump). Record verdicts in CHANGELOG.md.
+
+          New commits (SHA, author date):
+          ```
+          COMMITS_PLACEHOLDER
+          ```
+
+          Wire-relevant paths touched:
+          ```
+          RELEVANT_PLACEHOLDER
+          ```
+          EOF
+          )
+          BODY=${BODY/COMMITS_PLACEHOLDER/"${{ steps.cmp.outputs.commits }}"}
+          BODY=${BODY/RELEVANT_PLACEHOLDER/"${{ steps.cmp.outputs.relevant }}"}
+          EXISTING=$(gh issue list --state open --search "in:title \"upstream triage:\"" \
+            --json number --jq '.[0].number' || true)
+          if [ -n "$EXISTING" ] && [ "$EXISTING" != "null" ]; then
+            gh issue comment "$EXISTING" --body "$BODY"
+          else
+            gh issue create --title "$TITLE" --body "$BODY"
+          fi
+
+      - name: Report diverged history
+        if: steps.cmp.outputs.status == 'diverged'
+        run: |
+          echo "::warning::Upstream history no longer contains the pin (force push or branch change). Manual review required."
+          echo "Upstream diverged from pin — manual review required." >> "$GITHUB_STEP_SUMMARY"

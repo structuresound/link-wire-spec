@@ -32,7 +32,14 @@ source) and implementers (who must not).
 | [spec/01-discovery.md](spec/01-discovery.md) | Multicast peer discovery, peer state gossip | v0.1.0 |
 | [spec/02-sync.md](spec/02-sync.md) | Timeline, tempo, clock measurement, start/stop sync | v0.1.0 |
 | [spec/03-audio.md](spec/03-audio.md) | LinkAudio v1: channels, sinks/sources, audio buffers, beat-time alignment | v0.1.0 |
-| [vectors/](vectors/) | Captured packet traces (golden test vectors) | v0.1.0 |
+| [vectors/](vectors/) | Captured packet traces (golden test vectors) with auto-generated observed-fact manifests | v0.1.0 |
+
+Every claim in the spec carries an evidence class (Chapter 0 §1.1): wire-observed
+in a vector, behavioral (reference analysis), or normative. Observable facts about
+the vectors are generated from the capture bytes
+([tools/analyze_pcap.py](tools/analyze_pcap.py)) and structurally asserted
+([tools/check_vectors.py](tools/check_vectors.py)), so descriptions cannot drift
+from what the captures contain.
 
 ## Versioning and upstream tracking
 

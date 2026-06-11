@@ -11,46 +11,62 @@ is permitted to consume.
 
 Upstream pin: `902aef95bf94af49746fdda5369b42cdcfa1e6d2` (2026-05-19).
 
+### Evidence model
+
+Every claim in the spec is tagged with how it is known (Chapter 0 §1.1): **[W]**
+wire-observed (pinned to a released capture via auto-generated manifests and
+structural assertions), **[B]** behavioral (dirty-side analysis of the reference,
+not exercised by the captures), or **[N]** normative (a requirement of this spec).
+Observable facts about the vectors — topology, gateways per peer, message-type
+counts, datagram shapes — are *generated from the capture bytes* by
+`tools/analyze_pcap.py` into `vectors/manifests/`, and each capture must pass the
+per-scenario structural assertions in `tools/check_vectors.py` before release.
+
 ### Added
 
 - **Chapter 1 (Discovery):** completed from stub — multicast transport
   (`224.76.78.75:20808` v4, `ff12::8080` port 20808 v6), `_asdp_v\x01` framing,
   Alive/Response/ByeBye message types, peer-state payload entries (`tmln`, `sess`,
   `stst`, `mep4`/`mep6`, `aep4`/`aep6`) with the family-switch rule, ttl-based
-  timeout/pruning, and full byte layouts.
+  timeout/pruning, socket-configuration facts with wire-visible consequences
+  (notably: multicast loopback only on loopback-address gateways), and full byte
+  layouts.
 - **Chapter 2 (Sync):** completed from stub — `_link_v\x01` ping/pong measurement
   protocol, `__ht`/`__gt`/`_pgt`/`sess` entries, the ghost-time transform and median
   offset filter, the `tmln` timeline model with beat-origin priority, session
-  election/merge rules (ghost-time-wins with session-id tie-break), `stst` start/stop
-  propagation, and the quantum/phase model. Algorithm rationale cited to F. Goltz,
-  "Ableton Link — A technology to synchronize music software," LAC 2018.
-- **Test vectors** (`vectors/*.pcap`, CC0): `discovery-join-leave`,
-  `sync-tempo-change`, `sync-start-stop`, `audio-channel-lifecycle`, each described in
-  `vectors/README.md`.
-- **Capture rig** (`tools/capture-vectors.sh`, MIT) and CI workflow
-  (`.github/workflows/capture-vectors.yml`) that build the pinned reference and record
-  the scenarios above. Reference source is cloned outside the repo and never vendored.
+  election/merge rules (ghost-time-wins with session-id tie-break, including its
+  behavior under measurement noise), `stst` start/stop propagation, and the
+  quantum/phase model with the exact inverse phase-encoding equations. Algorithm
+  rationale cited to F. Goltz, "Ableton Link — A technology to synchronize music
+  software," LAC 2018.
+- **Test vectors** (`vectors/*.pcap`, CC0), each captured in an isolated network
+  namespace with a generated manifest: `discovery-join-leave`, `sync-tempo-change`,
+  `sync-start-stop`, `audio-channel-lifecycle` (including request keepalive
+  repetitions and a mid-stream tempo change), `multi-gateway-discovery`.
+- **Tooling** (MIT): `tools/capture-vectors.sh` (netns-isolated scenario rig),
+  `tools/analyze_pcap.py` (field-level decoder + manifest generator),
+  `tools/check_vectors.py` (structural assertions), with CI workflows
+  `capture-vectors.yml` and `upstream-watch.yml`. Reference source is cloned
+  outside the repo and never vendored.
 
 ### Open-question verdicts
 
-Resolved against the captures and reference runtime behavior:
-
-| # | Chapter | Question | Verdict |
-|---|---|---|---|
-| 00-§4.2 | Overview | string length `N` not bound-checked before construction | Bound is normative for implementations (`N` > remaining ⇒ parse error). Not exercisable by golden vectors; no on-wire string exceeds its region. |
-| 00-§4.5(7) | Overview | are duplicate payload-container keys ever legitimate? | No. Never emitted in any vector; senders MUST NOT emit duplicates, receivers apply last-one-wins defensively. |
-| 03-1 | Audio | does an `_abu` header precede the AudioBuffer structure? | **No** — confirmed by `audio-channel-lifecycle.pcap`; payload begins bare with the channel id. |
-| 03-2 | Audio | do receivers enforce a 1176- vs 1180-byte payload ceiling? | No receive-side ceiling; bounded only by the 1200-byte socket buffer (≤1180 payload). 24-byte budget is sender-side only. |
-| 03-3 | Audio | exact derivation of the 50-byte non-audio allowance | None — it is a hand-chosen fixed allowance; the encoder subtracts the real chunk-list size at runtime. Implementations need not reproduce 50. |
-| 03-4 | Audio | receiver behavior for names > 256 bytes | 256-byte cap is sender-side only; receivers accept longer length-prefixed names, bounded by the payload. |
-| 03-5 | Audio | handling of unknown nonzero codec values | Reference parses and decodes as PCM i16 (no recheck); only codec 1 ever transmitted. Spec recommends implementations reject unknown codecs. |
-| 03-6 | Audio | semantics of nonzero `groupId` | Reserved; reference sends 0 and drops nonzero. All captured traffic uses 0. MUST send 0, MUST ignore nonzero. |
-| 03-7 | Audio | duplicate payload entries legitimate? | Same as 00-§4.5(7): no. |
-| 03-8 | Audio | cross-host usability of advertised IPv6 (`aep6`) addresses | **Deferred** — requires `discovery-ipv6.pcap`, not producible in the v0.1.0 capture environment (no interface with both IPv4 and link-local IPv6). Carried to the next release. |
+| # | Chapter | Question | Verdict | Evidence |
+|---|---|---|---|---|
+| 00-§4.2 | Overview | string length `N` not bound-checked before construction | Bound is required of implementations (`N` > remaining ⇒ parse error). No on-wire string exceeds its region. | [B] reference analysis; [N] requirement; benign case [W] |
+| 00-§4.5(7) | Overview | are duplicate payload-container keys ever legitimate? | No. Senders MUST NOT emit duplicates; receivers apply last-one-wins. (Systematic near-exception: the sync pong's verbatim echo, Ch.2 §4.1.) | absence [W]; semantics [B]; rule [N] |
+| 03-1 | Audio | does an `_abu` header precede the AudioBuffer structure? | **No** — payload begins bare with the channel id. | [W] asserted over every captured AudioBuffer |
+| 03-2 | Audio | do receivers enforce a 1176- vs 1180-byte payload ceiling? | No receive-side ceiling; bounded only by the 1200-byte socket buffer. 24-byte budget is sender-side only. | [B]; not exercised by any vector |
+| 03-3 | Audio | exact derivation of the 50-byte non-audio allowance | None — hand-chosen fixed allowance; encoder subtracts the real chunk-list size at runtime. | [B]; resulting 502-byte cap [W] |
+| 03-4 | Audio | receiver behavior for names > 256 bytes | Cap is sender-side only; receivers accept longer length-prefixed names. | [B]; not exercised by any vector |
+| 03-5 | Audio | handling of unknown nonzero codec values | Reference parses and decodes as PCM i16 (no recheck). Spec recommends rejecting unknown codecs. | [B]; codec-1-only traffic [W]; recommendation [N] |
+| 03-6 | Audio | semantics of nonzero `groupId` | Reserved; MUST send 0, MUST ignore nonzero. | send-0 [W]; drop-nonzero [B]; rule [N] |
+| 03-7 | Audio | duplicate payload entries legitimate? | Same as 00-§4.5(7): no. | as above |
+| 03-8 | Audio | cross-host usability of advertised IPv6 (`aep6`) addresses | **Deferred** — requires `discovery-ipv6.pcap`; the capture environment's kernel has no IPv6 support. The rig emits it automatically where IPv6 exists. | open |
 
 ## [0.1.0-draft] — initial scaffolding
 
-- Provenance rules, upstream-watch workflow, version pin.
+- Provenance rules, version pin.
 - Drafts: 00-overview (serialization, transport model), 03-audio (LinkAudio v1).
   Chapters 01-discovery and 02-sync were stubs.
 - Upstream pin: `902aef95bf94af49746fdda5369b42cdcfa1e6d2` (2026-05-19).

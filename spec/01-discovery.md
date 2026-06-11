@@ -11,7 +11,10 @@ interoperability purposes. It contains no copied expression from the reference
 implementation.
 
 All encodings in this chapter use the common serialization rules of Chapter 0 §4
-(big-endian integers, the tagged payload container, 8-byte identifiers).
+(big-endian integers, the tagged payload container, 8-byte identifiers). Claims are
+tagged with the evidence classes of Chapter 0 §1.1 ([W] wire-observed / [B]
+behavioral / [N] normative); every vector under `vectors/` contains discovery
+traffic, with per-capture facts in `vectors/manifests/`.
 
 ---
 
@@ -48,12 +51,27 @@ ephemeral unicast port and destination port 20808; Response datagrams travel fro
 ephemeral port to ephemeral port. A peer therefore learns another peer's unicast
 discovery endpoint from the *source address* of any message it receives from it.
 
-Multicast loop is left enabled, so multiple peers on one host (including on the
-loopback interface) discover each other; self-messages are suppressed by node id
-(§5). The reference scans the interface list every **5 seconds** and opens/closes
-gateways as interfaces come and go. IPv4 is used on every running interface;
-link-local IPv6 is additionally used on interfaces that also have IPv4 (vector
-`discovery-ipv6.pcap` shows the IPv6 variant).
+Socket configuration facts with wire-visible consequences [B]:
+
+- The multicast receive socket is bound to the wildcard address at port 20808 with
+  address reuse enabled (several Link processes on one host share the port), joins
+  the group on the specific gateway interface, and on Linux restricts delivery to
+  groups joined on that socket.
+- **Multicast loopback is enabled only on a gateway whose address is itself a
+  loopback address.** On other gateways a peer's own multicast transmissions are not
+  delivered to sockets on the same host. Consequently, two peers on one host
+  discover each other through the loopback gateway (this is how every vector in
+  `vectors/` was captured [W]); a shared non-loopback interface does not provide
+  same-host discovery by itself.
+- The outbound multicast interface is pinned per gateway, so a multi-homed peer's
+  Alives go out each interface separately (vector `multi-gateway-discovery.pcap`
+  shows one NodeId announcing from two source addresses [W]).
+
+Self-messages are suppressed by node id (§5) [B]. The reference scans the interface
+list every **5 seconds** and opens/closes gateways as interfaces come and go [B].
+IPv4 is used on every running interface; link-local IPv6 is additionally used on
+interfaces that also have IPv4 [B] (no IPv6 vector has been captured yet — see
+`vectors/README.md`).
 
 ## 3. Message framing
 
@@ -68,13 +86,14 @@ Every discovery datagram has this layout:
 | 12 | 8 | id | sender's NodeId |
 | 20 | varies | — | payload (message-type specific) |
 
-Receiver admission rules (observed, stated as requirements):
+Receiver admission rules (reference behavior [B], stated as requirements [N]):
 
 - Datagrams shorter than 20 bytes, or not beginning with the 8-byte magic, MUST be
   ignored without error.
 - Datagrams whose header NodeId equals the receiver's own NodeId MUST be ignored
   (loopback suppression).
-- Datagrams with `groupId` ≠ 0 MUST be ignored.
+- Datagrams with `groupId` ≠ 0 MUST be ignored. (Every captured message carries
+  `groupId` 0 [W].)
 - Unknown message types MUST be ignored (the receiver keeps listening).
 
 ### 3.1 Size limit
@@ -83,9 +102,9 @@ The maximum discovery message size is 512 bytes. The reference encoder rejects a
 message whose total size is **512 or more** (strict less-than check), so the largest
 datagram it can emit is 511 bytes; its receive buffers are 512 bytes, so longer
 datagrams are truncated and will fail magic/parse checks only if the cut falls inside
-a field. Interoperating senders MUST keep discovery messages ≤ 511 bytes; receivers
-MUST accept any message up to 512 bytes. In practice a full peer state is ~107–121
-bytes (§6.1), far below the limit.
+a field [B]. **[N]** Interoperating senders MUST keep discovery messages ≤ 511 bytes;
+receivers MUST accept any message up to 512 bytes. In practice a full peer state is
+107–121 bytes (§6.1) [W], far below the limit.
 
 ## 4. Message types
 
@@ -100,30 +119,34 @@ bytes (§6.1), far below the limit.
 
 Sent to the multicast group(s) of the gateway:
 
-- **periodically**, with a nominal period of **250 ms**, derived as
-  `ttl × 1000 / ttlRatio` milliseconds with `ttl = 5` (seconds) and `ttlRatio = 20`;
+- **periodically**, with a nominal period of **250 ms** [B, and consistent with the
+  inter-Alive spacing in every discovery vector], derived as `ttl × 1000 / ttlRatio`
+  milliseconds with `ttl = 5` (seconds) and `ttlRatio = 20`;
 - **immediately on any state change** (timeline, session membership, start/stop
   state, endpoints), subject to a minimum spacing of **50 ms** between sends — a
-  state-change broadcast that would violate the spacing is delayed by the remainder.
+  state-change broadcast that would violate the spacing is delayed by the
+  remainder [B].
 
-A gateway with both IPv4 and IPv6 sends one Alive per address family per round.
+A gateway with both IPv4 and IPv6 sends one Alive per address family per round [B].
 
 ### 4.2 Response
 
 On receiving an Alive from another peer (valid header, not self, `groupId` 0), a peer
 MUST send a Response containing its own current peer state **unicast to the source
-endpoint** of the Alive datagram. For IPv6 sources, the destination's scope (zone)
-identifier is set to that of the receiving interface before sending.
+endpoint** of the Alive datagram [W: every discovery vector contains Responses to
+ephemeral source ports]. For IPv6 sources, the destination's scope (zone) identifier
+is set to that of the receiving interface before sending [B].
 
 The Response is sent regardless of whether the Alive's payload parses, and it is sent
-*before* the receiver processes the Alive's payload. Responses received are processed
-exactly like Alives (state dump) but do not themselves trigger a Response — this is
-what terminates the exchange.
+*before* the receiver processes the Alive's payload [B]. Responses received are
+processed exactly like Alives (state dump) but do not themselves trigger a
+Response — this is what terminates the exchange [B].
 
 ### 4.3 ByeBye
 
 Sent to the multicast group(s) when a peer shuts down a gateway (application exit or
-Link disable). Header `ttl` is 0 and the payload is empty: the message means only
+Link disable). Header `ttl` is 0 and the payload is empty [W: 20-byte ByeBye
+datagrams in `discovery-join-leave.pcap`, see its manifest]: the message means only
 "forget node `ident` on this gateway". A ByeBye is best-effort; peers that miss it
 fall back to ttl expiry (§7).
 
@@ -163,33 +186,35 @@ optional on receive — a missing entry leaves the corresponding state at its de
 | `aep4` | `0x61657034` | 6 | IPv4 address `u32` BE + port `u16` BE | audio endpoint, IPv4 (Chapter 3 §2) |
 | `aep6` | `0x61657036` | 18 | 16 address bytes + port `u16` BE | audio endpoint, IPv6 |
 
-Encoding rules (observed):
+Encoding rules:
 
 - **Family switch:** for each endpoint pair (`mep4`/`mep6`, `aep4`/`aep6`) exactly
   one entry is emitted, matching the address family of the gateway the message is
-  sent on. Per Chapter 0 §4.5 rule 5, the mismatched-family entry serializes to zero
-  bytes and is therefore omitted entirely.
+  sent on [B; the IPv4 side is [W] in every vector]. Per Chapter 0 §4.5 rule 5, the
+  mismatched-family entry serializes to zero bytes and is therefore omitted entirely.
 - The measurement endpoint is always advertised (every Link peer runs a measurement
-  socket per gateway, Chapter 2 §3). The audio endpoint is advertised only when
+  socket per gateway, Chapter 2 §3) [W]. The audio endpoint is advertised only when
   LinkAudio is enabled (Chapter 3 §2); plain Link peers emit neither `aep4` nor
-  `aep6`.
+  `aep6` [W: compare the peer-state shapes in the join-leave vs.
+  audio-channel-lifecycle manifests].
 - IPv6 endpoint values do not carry a scope (zone) identifier; the receiver
-  substitutes the scope of the interface the message arrived on.
+  substitutes the scope of the interface the message arrived on [B].
 - The advertised endpoints are meaningful only on the gateway the message was
-  received on; receivers track them per (peer, gateway).
+  received on; receivers track them per (peer, gateway) [B; per-gateway endpoint
+  advertisement is [W] in `multi-gateway-discovery.pcap`].
 
-### 6.1 Observed message sizes
+### 6.1 Peer-state message sizes
 
 With 8 bytes of entry header (key + size) per entry:
 
-| Configuration | Payload | Total datagram |
-|---|---|---|
-| plain Link, IPv4 gateway | 32 + 16 + 25 + 14 = 87 | **107** bytes |
-| LinkAudio enabled, IPv4 gateway | 87 + 14 = 101 | **121** bytes |
-| plain Link, IPv6 gateway | 32 + 16 + 25 + 26 = 99 | **119** bytes |
+| Configuration | Payload | Total datagram | Evidence |
+|---|---|---|---|
+| plain Link, IPv4 gateway | 32 + 16 + 25 + 14 = 87 | **107** bytes | [W] every discovery vector |
+| LinkAudio enabled, IPv4 gateway | 87 + 14 = 101 | **121** bytes | [W] `audio-channel-lifecycle.pcap` |
+| plain Link, IPv6 gateway | 32 + 16 + 25 + 26 = 99 | **119** bytes | derived by arithmetic; no IPv6 capture exists yet |
 
-(See vectors `discovery-join-leave.pcap`, `audio-channel-lifecycle.pcap`,
-`discovery-ipv6.pcap`.)
+The [W] sizes are pinned by the per-vector manifests
+(`vectors/manifests/*.md`, "Discovery peer-state shapes").
 
 ## 7. Peer table maintenance
 
@@ -204,10 +229,16 @@ Each gateway keeps a table of known peers with an expiry deadline per peer:
 
 The prune timer is scheduled for the **earliest deadline + 1 second** (padding
 against over-eager timeouts); each pruning pass removes every entry whose deadline
-has passed and re-arms the timer for the next-earliest survivor. Effective peer
+has passed and re-arms the timer for the next-earliest survivor [B]. Effective peer
 lifetime after the last refresh is therefore between `ttl` and `ttl + 1` seconds plus
 timer latency. With the reference's ttl of 5 s and period of 250 ms, a peer survives
 ~20 missed announcements.
+
+A visible consequence of peer-table emptiness appears in `discovery-join-leave.pcap`
+[W]: after the second peer's ByeBye, the survivor continues announcing under a **new
+NodeId** — losing the last session peer triggers the full state reset of Chapter 2
+§7.3 (fresh NodeId, fresh session). The vector's manifest accordingly lists three
+NodeIds for two processes.
 
 A peer reachable over several gateways has one entry per gateway and disappears from
 the application-visible peer set only when its last entry is gone. The

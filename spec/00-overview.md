@@ -25,6 +25,21 @@ LinkAudio v1 extension:
 This chapter defines terminology, the transport layout, and the **common serialization
 rules** that every other chapter depends on.
 
+### 1.1 Evidence classes
+
+So that no statement in this specification can drift from what was actually verified,
+claims are tagged with how they are known. The tags appear throughout all chapters:
+
+| Tag | Class | Meaning |
+|---|---|---|
+| **[W]** | wire-observed | Demonstrated by a released capture in `vectors/`; the auto-generated manifest (`vectors/manifests/`) and the structural checks (`tools/check_vectors.py`) pin the fact to packet bytes. |
+| **[B]** | behavioral | Determined by dirty-side analysis of the reference implementation or by runtime experiment, but **not exercised** by the released captures. Reliable, but not currently conformance-testable from the vectors alone. |
+| **[N]** | normative | A requirement this specification imposes for interoperability or safety. May be stricter than what the reference enforces. |
+
+Untagged statements describing byte layouts are [W] wherever the message type appears
+in any vector, [B] otherwise. The changelog records, for every resolved open
+question, which class its verdict rests on.
+
 ## 2. Terminology
 
 | Term | Definition |
@@ -88,13 +103,12 @@ bytes (the reference treats this as a parse failure for the whole containing ite
 | 4 | `N` | bytes | string contents, raw bytes (no NUL terminator, no padding) |
 
 The reference treats strings as opaque byte sequences; no character-set validation is
-performed. The reference decoder does not bound-check `N` against the remaining bytes
-of the enclosing region before constructing the string; a hostile `N` larger than the
-available bytes is a memory-safety hazard in a naive port. No string in any captured
-vector exceeds its enclosing region. **Requirement:** implementations MUST treat `N`
-greater than the remaining byte count as a parse error and MUST NOT read past the
-buffer. (Resolved v0.1.0: bound is normative for implementations; not exercised by
-golden vectors, which carry only well-formed strings.)
+performed [B]. The reference decoder does not bound-check `N` against the remaining
+bytes of the enclosing region before constructing the string [B]; a hostile `N`
+larger than the available bytes is a memory-safety hazard in a naive port. No string
+in any captured vector exceeds its enclosing region [W]. **[N] Requirement:**
+implementations MUST treat `N` greater than the remaining byte count as a parse error
+and MUST NOT read past the buffer.
 
 ### 4.3 Fixed-size arrays
 
@@ -141,10 +155,12 @@ Rules, stated as protocol requirements derived from observed behavior:
    entries through a key-indexed table.)
 7. Duplicate keys: each occurrence is dispatched in stream order; a later occurrence
    of the same key overwrites the effect of an earlier one in the reference
-   (last-one-wins). No message in any captured vector emits a duplicate key.
-   **Requirement:** senders MUST NOT emit duplicate entry keys within one payload;
-   receivers SHOULD apply last-one-wins defensively. (Resolved v0.1.0: duplicates are
-   never legitimate in v1; verified absent across all vectors.)
+   (last-one-wins) [B]. No message in any captured vector emits a duplicate key [W].
+   **[N] Requirement:** senders MUST NOT emit duplicate entry keys within one
+   payload; receivers SHOULD apply last-one-wins defensively. (One systematic
+   exception exists in the sync protocol, where a Pong echoes the Ping's payload
+   bytes after its own entries — see Chapter 2 §4.1; the echoed keys do not collide
+   with the Pong's own in practice.)
 
 ### 4.6 Tuples / composite structures
 

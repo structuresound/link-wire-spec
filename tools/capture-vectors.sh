@@ -1,33 +1,35 @@
 #!/usr/bin/env bash
 # capture-vectors.sh — build the pinned Ableton Link reference implementation
 # and record protocol test vectors (vectors/*.pcap) by running scripted
-# loopback scenarios between reference peers.
+# scenarios between reference peers.
 #
-# The reference source is cloned OUTSIDE the repository (default: /tmp) and is
-# never vendored or redistributed; only packet captures of its runtime
+# Each scenario runs inside an isolated network namespace so the topology is
+# controlled and documented, not inherited from the host: the default
+# environment is loopback-only (every peer has exactly one gateway), and the
+# multi-gateway scenario adds a second interface deliberately. After capture,
+# tools/analyze_pcap.py generates an observed-fact manifest per vector and
+# tools/check_vectors.py asserts each capture structurally contains the
+# events its scenario exists to demonstrate — a silently failed scenario
+# fails the run instead of shipping a hollow vector.
+#
+# The reference source is cloned OUTSIDE the repository (default: /tmp) and
+# is never vendored or redistributed; only packet captures of its runtime
 # behavior are stored. See PROVENANCE.md.
 #
-# Requirements: git, cmake, g++, tcpdump, jackd (dummy backend) + libjack-dev.
-# Must run as root or with CAP_NET_RAW/CAP_NET_ADMIN for tcpdump on loopback.
+# Requirements: git, cmake, g++, tcpdump, iproute2, unshare (util-linux),
+# python3, jackd (dummy backend) + libjack-dev. Run as root (or with
+# CAP_NET_ADMIN + CAP_NET_RAW).
 #
 # Usage: tools/capture-vectors.sh [scenario ...]
 #   scenarios: discovery-join-leave sync-tempo-change sync-start-stop
-#              audio-channel-lifecycle discovery-ipv6   (default: all)
+#              audio-channel-lifecycle multi-gateway-discovery
+#              discovery-ipv6                          (default: all)
 #
 # License: MIT
 
 set -euo pipefail
 trap '' PIPE # writing to a peer that already quit must not kill the script
-
-# Never leave reference peers or a tcpdump behind: a stray capture process
-# writing into the same output file corrupts the vector.
-cleanup() {
-  local pid
-  for pid in "${PEER_PID[@]:-}" "${TCPDUMP_PID:-}" "${JACK_PID:-}"; do
-    [ -n "$pid" ] && kill "$pid" 2>/dev/null || true
-  done
-}
-trap cleanup EXIT
+export PATH="$PATH:/usr/sbin:/sbin"
 
 REPO_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 PIN=$(tr -d '[:space:]' <"$REPO_DIR/LAST_REVIEWED_SHA")
@@ -36,8 +38,6 @@ SRC="$WORK/link"
 BIN="$SRC/build/bin"
 OUT=${LINK_CAPTURE_OUT:-$REPO_DIR/vectors}
 UPSTREAM_URL=${LINK_UPSTREAM_URL:-https://github.com/Ableton/link.git}
-
-mkdir -p "$WORK" "$OUT"
 
 log() { echo "[capture] $*" >&2; }
 
@@ -67,6 +67,16 @@ build_reference() {
 # pipe (the huts read unbuffered single characters; channel selection reads
 # one full line).
 declare -A PEER_FD PEER_PID
+TCPDUMP_PID=""
+JACK_PID=""
+
+cleanup() {
+  local pid
+  for pid in "${PEER_PID[@]:-}" "${TCPDUMP_PID:-}" "${JACK_PID:-}"; do
+    [ -n "$pid" ] && kill "$pid" 2>/dev/null || true
+  done
+}
+trap cleanup EXIT
 
 spawn() { # spawn NAME BINARY [ARGS...]
   local name=$1 binary=$2
@@ -100,12 +110,8 @@ quit_all() {
   PEER_PID=()
 }
 
-# ---------------------------------------------------------------- capture
-
-TCPDUMP_PID=""
-
 start_capture() { # start_capture FILE [IFACE [FILTER]]
-  local file=$1 iface=${2:-lo} filter=${3:-"udp and not port 53 and not port 5353"}
+  local file=$1 iface=${2:-lo} filter=${3:-udp}
   tcpdump -i "$iface" -w "$file" -U $filter >/dev/null 2>&1 &
   TCPDUMP_PID=$!
   sleep 1
@@ -118,10 +124,26 @@ stop_capture() {
   TCPDUMP_PID=""
 }
 
-# ---------------------------------------------------------------- scenarios
+start_jack() {
+  JACK_NO_AUDIO_RESERVATION=1 jackd -r -d dummy -r 48000 -p 256 \
+    >"$WORK/jackd.log" 2>&1 &
+  JACK_PID=$!
+  sleep 2
+}
 
-# Two plain Link peers on loopback. B joins 3 s after A, leaves first (its
-# ByeBye is on the wire), A keeps announcing alone afterwards.
+stop_jack() {
+  kill "$JACK_PID" 2>/dev/null || true
+  wait "$JACK_PID" 2>/dev/null || true
+  JACK_PID=""
+}
+
+# ---------------------------------------------------------------- scenarios
+# All scenario functions run INSIDE an isolated network namespace with lo up
+# (see inner_main). Default topology: loopback only -> one gateway per peer.
+
+# Two plain Link peers. B joins 3 s after A, leaves first (its ByeBye is on
+# the wire); A then re-founds a session alone (observable as a fresh NodeId)
+# and keeps announcing.
 scenario_discovery_join_leave() {
   start_capture "$OUT/discovery-join-leave.pcap"
   spawn a "$BIN/LinkHutSilent"
@@ -180,17 +202,14 @@ scenario_sync_start_stop() {
 
 # Two LinkAudio peers (JACK dummy backend): audio endpoints advertised in
 # discovery, unicast PeerAnnouncements with channel lists and ping/pong,
-# channel request, audio streaming, stop-request, channel byes.
+# channel request + its 5 s keepalive repetitions, audio streaming including
+# a mid-stream tempo change, stop-request, channel byes.
 scenario_audio_channel_lifecycle() {
   if ! command -v jackd >/dev/null; then
     log "SKIP audio-channel-lifecycle: jackd not installed"
     return
   fi
-  JACK_NO_AUDIO_RESERVATION=1 jackd -r -d dummy -r 48000 -p 256 \
-    >"$WORK/jackd.log" 2>&1 &
-  JACK_PID=$!
-  sleep 2
-
+  start_jack
   start_capture "$OUT/audio-channel-lifecycle.pcap"
   spawn alice "$BIN/LinkAudioHut" Alice
   spawn bob "$BIN/LinkAudioHut" Bob
@@ -206,61 +225,115 @@ scenario_audio_channel_lifecycle() {
   send bob o # Bob: create source...
   sleep 0.5
   send bob $'0\n' # ...for channel index 0 (Alice | A Sink)
-  sleep 4 # ChannelRequest + AudioBuffer stream
+  sleep 6 # stream; first request keepalive at +5 s
+  send alice e # tempo change while streaming (new tempo in chunks)
+  sleep 5 # stream at new tempo; second keepalive at +10 s
   send bob o # Bob removes the source: StopChannelRequest
   sleep 1
   send alice c # Alice disables LinkAudio: ChannelByes
   sleep 1
   quit_all
   stop_capture
-
-  kill "$JACK_PID" 2>/dev/null || true
-  wait "$JACK_PID" 2>/dev/null || true
-  JACK_PID=""
+  stop_jack
 }
 
-# IPv6 variant of discovery: requires a non-loopback interface with both an
-# IPv4 and a link-local IPv6 address (the reference only uses link-local v6,
-# and only on interfaces that also run v4). Skipped when unavailable.
+# Two peers, each running on TWO gateways: loopback plus a second interface
+# added inside the namespace. Shows per-gateway announcement (each NodeId
+# transmits from both source addresses, each advertising a gateway-specific
+# measurement endpoint).
+scenario_multi_gateway_discovery() {
+  # veth pair: bringing both ends up gives gw1 carrier (IFF_RUNNING), which
+  # the reference's interface scanner requires
+  ip link add gw1 type veth peer name gw1p 2>/dev/null \
+    || { log "SKIP multi-gateway-discovery: cannot create veth interface"; return; }
+  ip addr add 192.168.77.1/24 dev gw1
+  ip link set gw1 up
+  ip link set gw1p up
+  start_capture "$OUT/multi-gateway-discovery.pcap" any
+  spawn a "$BIN/LinkHutSilent"
+  spawn b "$BIN/LinkHutSilent"
+  sleep 0.5
+  send a a
+  send b a
+  sleep 6
+  quit_all
+  stop_capture
+  ip link delete gw1 2>/dev/null || true
+}
+
+# IPv6 variant of discovery: requires kernel IPv6 plus an interface with
+# both an IPv4 and a link-local IPv6 address (the reference only uses
+# link-local v6, and only on interfaces that also run v4). Skipped when
+# unavailable.
 scenario_discovery_ipv6() {
-  local iface=""
-  local candidate
-  for candidate in $(ls /sys/class/net 2>/dev/null); do
-    [ "$candidate" = lo ] && continue
-    if ip -6 addr show dev "$candidate" scope link 2>/dev/null | grep -q fe80 \
-      && ip -4 addr show dev "$candidate" 2>/dev/null | grep -q inet; then
-      iface=$candidate
-      break
-    fi
-  done
-  if [ -z "$iface" ]; then
-    log "SKIP discovery-ipv6: no interface with IPv4 + link-local IPv6"
+  if [ ! -e /proc/net/if_inet6 ]; then
+    log "SKIP discovery-ipv6: kernel IPv6 not available"
     return
   fi
-  start_capture "$OUT/discovery-ipv6.pcap" "$iface" "ip6 and udp"
+  ip link add gw6 type veth peer name gw6p 2>/dev/null \
+    || { log "SKIP discovery-ipv6: cannot create veth interface"; return; }
+  ip addr add 192.168.78.1/24 dev gw6
+  ip link set gw6 up
+  ip link set gw6p up
+  sleep 1 # let the kernel assign the link-local v6 address
+  if ! ip -6 addr show dev gw6 scope link | grep -q fe80; then
+    log "SKIP discovery-ipv6: no link-local IPv6 on test interface"
+    ip link delete gw6 2>/dev/null || true
+    return
+  fi
+  start_capture "$OUT/discovery-ipv6.pcap" any "ip6 and udp"
   spawn a6 "$BIN/LinkHutSilent"
   spawn b6 "$BIN/LinkHutSilent"
   sleep 0.5
   send a6 a
   send b6 a
-  sleep 5
+  sleep 6
   quit_all
   stop_capture
+  ip link delete gw6 2>/dev/null || true
 }
 
-# ---------------------------------------------------------------- main
+# ---------------------------------------------------------------- netns glue
 
-SCENARIOS=("$@")
-if [ ${#SCENARIOS[@]} -eq 0 ]; then
-  SCENARIOS=(discovery-join-leave sync-tempo-change sync-start-stop
-    audio-channel-lifecycle discovery-ipv6)
-fi
+ALL_SCENARIOS=(discovery-join-leave sync-tempo-change sync-start-stop
+  audio-channel-lifecycle multi-gateway-discovery discovery-ipv6)
 
-build_reference
-for s in "${SCENARIOS[@]}"; do
-  log "scenario: $s"
+inner_main() { # runs inside `unshare --net`
+  local s=$1
+  ip link set lo up
   "scenario_${s//-/_}"
-done
+}
 
-log "captures written to $OUT:"
-ls -la "$OUT"/*.pcap >&2 || true
+outer_main() {
+  local scenarios=("$@")
+  [ ${#scenarios[@]} -eq 0 ] && scenarios=("${ALL_SCENARIOS[@]}")
+
+  mkdir -p "$WORK" "$OUT"
+  build_reference
+
+  for s in "${scenarios[@]}"; do
+    log "scenario: $s (isolated netns)"
+    unshare --net "$BASH" "$0" --inner "$s"
+  done
+
+  log "generating observed-fact manifests"
+  mkdir -p "$OUT/manifests"
+  for f in "$OUT"/*.pcap; do
+    [ -e "$f" ] || continue
+    python3 "$REPO_DIR/tools/analyze_pcap.py" "$f" \
+      >"$OUT/manifests/$(basename "${f%.pcap}").md"
+  done
+
+  log "running structural assertions"
+  python3 "$REPO_DIR/tools/check_vectors.py" "$OUT"
+
+  log "captures written to $OUT:"
+  ls -la "$OUT"/*.pcap >&2 || true
+}
+
+if [ "${1:-}" = "--inner" ]; then
+  shift
+  inner_main "$@"
+else
+  outer_main "$@"
+fi

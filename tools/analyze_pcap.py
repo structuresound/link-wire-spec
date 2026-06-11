@@ -21,6 +21,7 @@ Usage:
 License: MIT
 """
 import sys
+import os
 import struct
 import json
 import argparse
@@ -311,7 +312,7 @@ def build_manifest(path):
     peers = sorted(gateways.keys())
 
     man = {
-        "file": path,
+        "file": os.path.basename(path),
         "linktype": LINKTYPES.get(linktype, str(linktype)),
         "frames_total": len(pkts),
         "protocol_messages": len(msgs),
@@ -335,6 +336,26 @@ def build_manifest(path):
         {"entry_keys": list(k), "datagram_sizes": sorted(v)}
         for k, v in disc_sets.items()
     ]
+
+    # discovery: timeline and start/stop content summaries
+    tmln_tempos, beat_origins, stst_states = set(), [], set()
+    for m in disc:
+        for e in m.get("entries", []):
+            v = e.get("value", {})
+            if e["key"] == "tmln" and "tempo_us_per_beat" in v:
+                tmln_tempos.add(v["tempo_us_per_beat"])
+                beat_origins.append(v["beatOrigin_ubeats"])
+            if e["key"] == "stst" and "isPlaying" in v:
+                stst_states.add((v["isPlaying"], v["timestamp_us"]))
+    man["discovery_tmln"] = {
+        "distinct_tempos_us_per_beat": sorted(tmln_tempos),
+        "beatOrigin_min_ubeats": min(beat_origins) if beat_origins else None,
+        "beatOrigin_max_ubeats": max(beat_origins) if beat_origins else None,
+    }
+    man["discovery_stst"] = {
+        "isPlaying_values_seen": sorted({s[0] for s in stst_states}),
+        "distinct_states": len(stst_states),
+    }
 
     # sync: ping/pong sizes and entry-key sets
     sync_sets = defaultdict(set)
@@ -408,6 +429,13 @@ def print_manifest_md(man):
     p("\n## Discovery peer-state shapes\n")
     for s in man["discovery_peerstate"]:
         p(f"- entries {s['entry_keys']} -> datagram sizes {s['datagram_sizes']} bytes")
+    t = man["discovery_tmln"]
+    p(f"- timeline tempos seen (us/beat): {t['distinct_tempos_us_per_beat']}; "
+      f"beatOrigin range (ubeats): [{t['beatOrigin_min_ubeats']}, "
+      f"{t['beatOrigin_max_ubeats']}]")
+    s = man["discovery_stst"]
+    p(f"- start/stop isPlaying values seen: {s['isPlaying_values_seen']} "
+      f"({s['distinct_states']} distinct states)")
     p("\n## Sync message shapes\n")
     for s in man["sync_messages"]:
         p(f"- {s['shape']} -> {s['datagram_sizes']} bytes")
