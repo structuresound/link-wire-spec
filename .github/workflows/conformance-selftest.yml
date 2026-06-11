@@ -35,6 +35,7 @@ jobs:
         env:
           LINK_CAPTURE_WORK: ${{ runner.temp }}/link-reference
         run: |
+          set -o pipefail
           sudo --preserve-env=LINK_CAPTURE_WORK \
             bash conformance/run-isolated.sh | tee observations.txt
 

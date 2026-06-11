@@ -177,11 +177,28 @@ class HutAdapter:
             if st.get("enabled"):
                 self.keys("a")
         elif cmd == "tempo" and args:
-            # the huts step tempo by 1 bpm per keypress
+            # The huts step tempo by 1 bpm per keypress and consume piped
+            # stdin at only a few characters per second, so a single burst
+            # of keypresses outruns the hut (observed: ~12 of 20 steps
+            # applied after 5 s). Drive closed-loop instead: one keypress
+            # at a time, each confirmed against the hut's own reported
+            # tempo before the next, so the hut can never be outrun or
+            # overshot.
             target = round(float(args[0]))
-            current = round(st.get("tempo", 120.0))
-            delta = target - current
-            self.keys("e" * delta if delta > 0 else "w" * (-delta))
+            deadline = time.monotonic() + 30.0
+            while time.monotonic() < deadline:
+                cur_st = self.wait_state() or {}
+                current = round(cur_st.get("tempo", 120.0))
+                if current == target:
+                    break
+                self.keys("e" if target > current else "w")
+                t0 = time.monotonic()
+                while time.monotonic() - t0 < 1.0:
+                    with self.lock:
+                        seen = self.state or {}
+                    if round(seen.get("tempo", current)) != current:
+                        break
+                    time.sleep(0.05)
         elif cmd == "start":
             if not st.get("playing"):
                 self.keys(" ")
