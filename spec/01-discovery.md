@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Spec version | 0.1.0 |
+| Spec version | 0.4.0 |
 | Upstream reference | Ableton/link @ `902aef95bf94af49746fdda5369b42cdcfa1e6d2` |
 | License | CC-BY-4.0 |
 
@@ -69,9 +69,12 @@ Socket configuration facts with wire-visible consequences [B]:
 
 Self-messages are suppressed by node id (§5) [B]. The reference scans the interface
 list every **5 seconds** and opens/closes gateways as interfaces come and go [B].
-IPv4 is used on every running interface; link-local IPv6 is additionally used on
-interfaces that also have IPv4 [B] (no IPv6 vector has been captured yet — see
-`vectors/README.md`).
+IPv4 is used on every running interface; IPv6 is additionally used on interfaces
+that also have IPv4, and **only with non-loopback link-local addresses**
+(`fe80::/10`) — every platform scanner with an IPv6 path applies this filter, so
+every IPv6 gateway, and hence every IPv6 endpoint advertised in peer state (§6), is
+a link-local address [B]. (No IPv6 vector has been captured yet — see
+`vectors/README.md`.)
 
 ## 3. Message framing
 
@@ -119,6 +122,10 @@ receivers MUST accept any message up to 512 bytes. In practice a full peer state
 
 Sent to the multicast group(s) of the gateway:
 
+- **immediately when the gateway opens** (Link enabled, or the interface appeared in
+  a rescan): the first Alive is sent at startup, without waiting for the first
+  nominal period [B; in every vector the first Alive follows enable with no 250 ms
+  delay];
 - **periodically**, with a nominal period of **250 ms** [B, and consistent with the
   inter-Alive spacing in every discovery vector], derived as `ttl × 1000 / ttlRatio`
   milliseconds with `ttl = 5` (seconds) and `ttlRatio = 20`;
@@ -223,7 +230,7 @@ Each gateway keeps a table of known peers with an expiry deadline per peer:
 | Event | Effect on (peer, gateway) entry |
 |---|---|
 | Alive / Response received | entry created or refreshed; deadline := now + header `ttl` seconds; state replaced by the message's payload |
-| ByeBye received | entry removed immediately |
+| ByeBye received | entry removed immediately; a ByeBye naming a peer not in the table has no effect [B] |
 | deadline passed | entry removed by the prune timer |
 | gateway closed locally | all entries for that gateway removed |
 

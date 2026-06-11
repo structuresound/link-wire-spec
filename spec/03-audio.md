@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Spec version | 0.1.0 |
+| Spec version | 0.4.0 |
 | Upstream reference | Ableton/link @ `902aef95bf94af49746fdda5369b42cdcfa1e6d2` |
 | License | CC-BY-4.0 |
 
@@ -60,7 +60,10 @@ Encoding rules (observed):
   recorded endpoint for that peer.
 - **IPv6 scope:** IPv6 scope identifiers are not transmitted. A receiver of an `aep6`
   endpoint sets the scope (zone) of the address to that of the interface on which the
-  advertisement arrived before using it as a destination.
+  advertisement arrived before using it as a destination. This substitution is sound
+  because advertised IPv6 endpoints are always link-local addresses of the sending
+  gateway (Chapter 1 §2) and the advertisement is confined to the shared link — see
+  §11 item 8.
 - The endpoint port is OS-assigned (ephemeral); one audio socket exists per gateway.
 
 The measurement endpoint entries `mep4` (`0x6d657034`) / `mep6` (`0x6d657036`) use the
@@ -541,8 +544,8 @@ beginBeats, tempo, count, sessionId, sampleRate, numChannels) unit.
 
 ## 11. Open questions (tracking list)
 
-Resolved at v0.1.0, each with the evidence class (Chapter 0 §1.1) its verdict rests
-on; the CHANGELOG carries the same table:
+All resolved — items 1–7 at v0.1.0, item 8 at v0.4.0 — each with the evidence class
+(Chapter 0 §1.1) its verdict rests on; the CHANGELOG carries the same table:
 
 1. **Resolved [W]** — `_abu` is **not** written on the wire; AudioBuffer payloads
    begin bare with the channel id. Asserted over every AudioBuffer in
@@ -566,11 +569,27 @@ on; the CHANGELOG carries the same table:
    the sync-pong echo, Chapter 0 §4.5 rule 7); receivers apply last-one-wins [B].
    Senders MUST NOT emit duplicates [N].
 
-Deferred:
+8. **Resolved (v0.4.0) [B]** — advertised IPv6 endpoints (`aep6`, and equally
+   `mep6`) are usable cross-host **on the link they were learned on, and only
+   there**. Grounds:
+   1. Every IPv6 address the reference admits as a gateway — and therefore every
+      address it can advertise in a v6 endpoint entry — is a **non-loopback
+      link-local address** (`fe80::/10`); both platform interface scanners with an
+      IPv6 path (POSIX and Windows) apply this filter, and the remaining platform
+      (esp32) has no IPv6 path at all [B].
+   2. The advertisement only travels within the link: the v6 discovery group
+      `ff12::8080` has link-local multicast scope (RFC 4291), and Responses are
+      unicast on the same link.
+   3. Hence the receiving interface is attached to the same link as the advertised
+      address, and substituting that interface's scope (zone) id yields a valid
+      destination by construction; the substitution cannot mis-route because the
+      scope is taken from the interface the advertisement actually arrived on.
 
-8. **OPEN QUESTION:** cross-host usability of advertised IPv6 (`aep6`) addresses given
-   that scope ids are not transmitted (receiver substitutes its own interface scope).
-   Requires the `discovery-ipv6.pcap` vector, which the v0.1.0 capture environment
-   could not produce (its kernel has no IPv6 support). The capture script detects
-   IPv6 availability and emits this vector automatically where present; the question
-   is carried forward to the next release.
+   Consequences: v1 IPv6 endpoints never work across routed segments (inherent to
+   link-local addressing), and an implementation MUST use a learned v6 endpoint
+   only via the gateway it was learned on (per-gateway endpoint tracking, Chapter 1
+   §6) [N]. Wire-level confirmation (`discovery-ipv6.pcap`) is still pending an
+   IPv6-capable capture environment — the v0.1.0 and v0.4.0 environments both lack
+   kernel IPv6 — and the capture rig emits that vector automatically where IPv6
+   exists; this would raise the evidence class from [B] to [W] but is no longer
+   required to answer the question.

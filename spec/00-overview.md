@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Spec version | 0.1.0 |
+| Spec version | 0.4.0 |
 | Upstream reference | Ableton/link @ `902aef95bf94af49746fdda5369b42cdcfa1e6d2` |
 | License | CC-BY-4.0 |
 

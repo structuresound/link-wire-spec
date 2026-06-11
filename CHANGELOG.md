@@ -3,6 +3,72 @@
 All notable changes to this specification. Every entry records the upstream
 pin (`Ableton/link` commit) the spec describes at that version.
 
+## [0.4.0] — 2026-06-11
+
+Upstream pin: `902aef95bf94af49746fdda5369b42cdcfa1e6d2` (2026-05-19) — unchanged
+from 0.1.0; upstream has not moved past the pin. Versions 0.2.x–0.3.x were never
+released; this release consolidates the discovery/sync chapter revision pass, the
+capture-rig audit, and the final audio open-question resolution.
+
+### Verified
+
+Every protocol claim in Chapters 0–2 was re-verified line-by-line against the
+pinned reference source (dirty-side analysis): framing and the strict
+encoder/receiver size asymmetry, all message types, broadcast pacing
+(50 ms minimum / `ttl·1000/ttlRatio` nominal), respond-before-process ordering,
+prune-timer semantics, ping/pong payload shapes and the 32-byte responder
+admission bound, both offset estimators and the >100-sample median completion,
+the session join rule with ε = 500,000 µs and the id tie-break,
+measurement-target selection (founder preferred), the 30 s re-measurement
+schedule, beat-origin timeline priority including the
+`max(now-beats, origin+1 µbeat)` modification rule, the 20–999 bpm receive-side
+re-clamp, `stst` field order and latest-timestamp-wins propagation, the
+session-peer-count-zero full reset (fresh NodeId), and the exact phase-encoding
+equations including the inverse's opposite tie-break. No discrepancy was found;
+all corrections below are additions, not retractions.
+
+### Changed
+
+- **Chapter 1 (Discovery):** documented the immediate Alive on gateway open
+  (before the first nominal period) [B]; ByeBye for an unknown peer is a no-op
+  [B]; sharpened the IPv6 gateway rule — every admitted IPv6 gateway address, and
+  hence every advertised IPv6 endpoint, is a non-loopback **link-local**
+  (`fe80::/10`) address, on all platforms with an IPv6 path [B].
+- **Chapter 2 (Sync):** sharpened §7.3 — the 30 s re-measurement loop runs on
+  peers that **joined** a foreign session; a founder still in its own session
+  does not re-measure (its transform is exact by construction) [B]. Added to
+  §7.2: after a join the abandoned session is retained in the known-sessions
+  cache with its measurement (no re-measurement on re-encounter), and cached
+  sessions' timelines follow the same beat-origin priority rule [B].
+- **Chapter 3 (Audio):** resolved the last open question (see verdicts below);
+  §2's IPv6-scope rule now cites the grounds.
+- Chapter version stamps bumped to 0.4.0; vectors README updated for the
+  question-8 verdict.
+
+### Capture-rig audit
+
+The full rig (`tools/build-reference.sh` + `tools/capture-vectors.sh` +
+`capture-vectors.yml`) was exercised end-to-end in a fresh Linux environment:
+reference built from the pinned SHA, all five capturable scenarios ran in
+isolated network namespaces, manifests regenerated, and **every structural
+assertion in `tools/check_vectors.py` passed**. The audit run reproduced the
+released vectors' structural facts exactly (peer-state datagram sizes 107/121,
+sync shapes 25/57/41/73, codec 1 only, keepalive repetitions, mid-stream tempo
+change in chunks, multi-gateway announcements), differing only in the documented
+per-run randomness (NodeIds, ephemeral ports, timestamps). The released v0.1.0
+vectors remain the released evidence — captures are not byte-reproducible, so
+re-capturing without cause would only churn the evidence base. The
+`discovery-ipv6` scenario again skipped correctly: this environment's kernel,
+like v0.1.0's, has no IPv6 support.
+
+### Open-question verdicts
+
+| # | Chapter | Question | Verdict | Evidence |
+|---|---|---|---|---|
+| 03-8 | Audio | cross-host usability of advertised IPv6 (`aep6`/`mep6`) endpoints, scope ids not being transmitted | **Resolved.** Usable cross-host on (and only on) the link they were learned on. All advertised v6 endpoints are link-local addresses (platform scanners admit only non-loopback `fe80::/10` v6 gateways); the v6 discovery group `ff12::8080` is link-local scope, so the receiving interface shares the advertiser's link and the scope substitution is correct by construction. Implementations MUST use a learned v6 endpoint only via the gateway it was learned on. | [B] reference analysis; rule [N]. A future `discovery-ipv6.pcap` raises this to [W] but is no longer needed to answer the question. |
+
+With this verdict, **no OPEN QUESTION remains in any chapter.**
+
 ## [0.1.0] — 2026-06-11
 
 First complete release. Spec text plus test vectors; this is the only artifact
