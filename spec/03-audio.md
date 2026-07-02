@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Spec version | 0.4.0 |
+| Spec version | 0.4.1 |
 | Upstream reference | Ableton/link @ `902aef95bf94af49746fdda5369b42cdcfa1e6d2` |
 | License | CC-BY-4.0 |
 
@@ -340,6 +340,32 @@ constant matters only as the basis for the capacity figures below.
 - The reference also suppresses transmission of buffers committed with tempo ≤ 0
   (used internally to mark discarded buffers).
 - AudioBuffer messages carry header `ttl = 0`.
+
+### 5.8 Throughput requirements (informative)
+
+The data plane is **open-loop**: there is no acknowledgement, retransmission,
+congestion control, or rate adaptation anywhere in the protocol. A sink emits at
+the source's sample rate regardless of path capacity, and nothing in the wire
+protocol signals overload back to it (chunk sequence numbers let a receiver
+*detect* loss, §5.3, but no message reports it).
+
+Sizing: a PCM i16 stream needs `sampleRate × channels × 16` bit/s of sample
+payload — ≈ 768 kbit/s for 48 kHz mono, ≈ 1.54 Mbit/s stereo — carried, at the
+reference's 502-byte sample cap (§5.6), in ≈ 576-byte datagrams (≈ 15 %
+application-layer framing overhead, more with IP/UDP headers), **per channel per
+requester** (§5.7: one unicast copy each).
+
+Consequence, measured with reference peers on a rate-limited link [B]: when the
+aggregate stream rate exceeds the path capacity, the constant-rate audio stream
+saturates the bottleneck and the loss falls on *everything* sharing it —
+including announcements, requests, and byes flowing the other way. Observed at
+256 kbit/s aggregate with one 48 kHz mono stream: the first subscriber keeps
+receiving (with heavy sample loss), while a peer subscribing in the reverse
+direction receives no audio at all within a 12 s window, and channel teardown
+can be delayed to bye-retransmission/ttl timescales. Deployments must provision
+capacity above the sum of all active streams; implementations SHOULD surface
+per-channel loss (from sequence-number gaps) so applications can react, since
+the protocol will not.
 
 ## 6. Beat-time alignment
 

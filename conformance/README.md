@@ -77,6 +77,33 @@ sudo conformance/run-isolated.sh
 Exit code is 0 iff no observation failed. Individual scenarios can be selected
 by name: `sudo conformance/run-isolated.sh tempo-follow beat-alignment`.
 
+## Impaired-network runs
+
+`run-isolated.sh` can degrade the namespace's loopback link to probe behavior
+at various latencies, loss rates, and throughputs (the operating-envelope facts
+in spec chapters 02 §5.1 and 03 §5.8 were measured this way):
+
+```
+SHAPE="--delay 200 --jitter 50" sudo --preserve-env=SHAPE,CANDIDATE_CMD,CANDIDATE_FEATURES \
+  bash conformance/run-isolated.sh
+```
+
+`SHAPE` is passed to `tools/udp-shaper.py` (one-way `--delay`/`--jitter` in ms,
+`--loss` in percent, `--rate` in kbit/s), a userspace NFQUEUE shaper that works
+on kernels without qdisc modules (`tc netem` unavailable in many containers).
+It requires the `NetfilterQueue` pip package and kernel nfnetlink_queue
+support. Delay is applied once per packet, so one-way delay = `--delay`,
+RTT = 2×.
+
+Interpretation guide: scenario timing assertions assume LAN-like latency.
+Run the same `SHAPE` in self-test mode (no `CANDIDATE_CMD`) as a control —
+only candidate failures that the reference-vs-reference control does *not*
+reproduce indicate a candidate divergence. Expected from the spec's
+envelope: all scenarios hold through ≈ 100 ms one-way delay; at ≥ 200 ms
+one-way, session merging becomes probabilistic (setup failures) for the
+reference itself; ≥ 10 % loss makes merging intermittent; rate limits below
+an audio stream's bandwidth starve reverse-direction control traffic.
+
 ## Integrating in a candidate repository
 
 Copy `example-candidate-ci.yml` into the candidate repo's workflows after

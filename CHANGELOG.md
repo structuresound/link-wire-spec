@@ -3,6 +3,67 @@
 All notable changes to this specification. Every entry records the upstream
 pin (`Ableton/link` commit) the spec describes at that version.
 
+## [0.4.1] — 2026-07-02
+
+Upstream pin: `902aef95bf94af49746fdda5369b42cdcfa1e6d2` — unchanged.
+
+Operating-envelope release: documents how the protocols behave at various
+latencies, loss rates, and throughputs. Motivated by an interop campaign
+(below) whose results the v0.4.0 text could not explain: sessions merge at
+round-trip times where §4.2 as previously written implies every measurement
+fails. All changes are additions and sharpenings; no retractions.
+
+### Changed
+
+- **Chapter 2 (Sync):** sharpened §4.2 — the 5-retry measurement budget is
+  **cumulative over a measurement's lifetime** and is never restored by pong
+  receipt; each retry adds an in-flight ping chain [B]. Documented pong
+  admission: pongs are correlated to measurements only by expected `sess`
+  (the reference offers every measurement-socket datagram to every
+  measurement in progress and continues each chain toward the pong's source
+  endpoint), so concurrent measurements expecting different sessions can
+  abort one another; implementations MAY correlate by source endpoint [N].
+  Added **§5.1 "Operating envelope: round-trip time"**: the derived
+  `(1 + 5) × 50 ms ≈ 300 ms` single-measurement viability bound; session
+  merging beyond the bound through cross-attempt pong inheritance via the
+  §7.1 forget→re-measure loop (probabilistic, seconds instead of
+  sub-second); loss consumes the same retry budget (merging intermittent at
+  10 % loss while in-session gossip keeps working); re-measurement
+  starvation — above the bound the 30 s re-measure loop never succeeds, the
+  ghost transform freezes at its join-time value, and drift correction
+  stalls while the session persists [B]. Cross-references added in §7.1 and
+  §7.3; constants table extended.
+- **Chapter 3 (Audio):** added **§5.8 "Throughput requirements
+  (informative)"** — the data plane is open-loop (no acknowledgement,
+  retransmission, congestion control, or rate adaptation); per-stream
+  bandwidth arithmetic (≈ 768 kbit/s per 48 kHz mono PCM stream, per
+  requester); on an undersized path the constant-rate stream saturates the
+  bottleneck and starves reverse-direction traffic (a reverse-direction
+  subscriber receives no audio; channel teardown can be delayed) [B].
+- **Conformance harness:** `run-isolated.sh` accepts `SHAPE` to run any
+  scenario under configured delay/jitter/loss/rate via the new
+  `tools/udp-shaper.py` (userspace NFQUEUE shaper for kernels without qdisc
+  modules; no protocol logic). README documents impaired-network runs and
+  the control-run methodology (compare candidate failures against a
+  reference-vs-reference control under the same impairment).
+- Chapter version stamps for chapters 2 and 3 bumped to 0.4.1.
+
+### Evidence
+
+Impairment sweep against the pinned reference build (Link 4.0 + examples-only
+commits), reference-vs-reference and reference-vs-candidate
+([link-wire-rs](https://github.com/structuresound/link-wire-rs)
+`conformance-peer`), all five harness scenarios per condition, on a shaped
+loopback in an isolated netns: one-way delay 10/50/100/200/300 ms with
+proportional jitter, loss 2/10 %, rate 20 Mbit/s–256 kbit/s. Both pairings
+pass everything through 100 ms one-way (RTT 200 ms), including beat phase
+within 0.01 beats and bidirectional audio; at 200–300 ms one-way both show
+the same probabilistic session-merge setup failures; at 10 % loss both merge
+intermittently; at 256 kbit/s both show the same reverse-direction audio
+subscription starvation. **No candidate-only divergence was observed at any
+operating point** — every deviation from ideal behavior reproduced in the
+reference-vs-reference control.
+
 ## [0.4.0] — 2026-06-11
 
 Upstream pin: `902aef95bf94af49746fdda5369b42cdcfa1e6d2` (2026-05-19) — unchanged
