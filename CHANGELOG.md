@@ -3,6 +3,43 @@
 All notable changes to this specification. Every entry records the upstream
 pin (`Ableton/link` commit) the spec describes at that version.
 
+## [0.4.3] — 2026-07-03
+
+Upstream pin: `902aef95bf94af49746fdda5369b42cdcfa1e6d2` — unchanged.
+
+Extends the (non-normative) `spec/proposals/tactus-native-audio.md` design study.
+No change to normative chapters beyond the version stamp.
+
+### Changed
+
+- **Reframed the proposal as *tactus-native*, not LinkAudio parity.** Link /
+  LinkAudio-v1 compatibility is stated as a graceful-degradation floor for mixed
+  sessions, not the design target; native-to-native traffic is unconstrained by
+  v1, and only the *fallback* is bounded by what a reference peer tolerates.
+- **Rewrote §7.2 (point-to-point over USB/Thunderbolt).** Corrects the earlier
+  "run software PTP, ~tens of µs" framing: hardware timestamping latches in the
+  MAC/PHY and is not exposed on Apple's USB/TB-net interfaces (SIP + signed-kext +
+  DriverKit make going around it unshippable), so software PTP is both fragile and
+  the *wrong tool* for a p2p link. A dedicated link doesn't need PTP: use
+  transport-native clocking (USB Audio Class async feedback / SOF reference) or
+  master-by-construction with receiver rate recovery; Thunderbolt (PCIe/DMA) beats
+  USB 2.0 (125 µs polled). PTP re-enters only on switched fabrics; if PHY
+  timestamping is truly required, add a PTP-capable USB3/TB Ethernet adapter.
+- **Added §8 "Control plane and mesh (tactus-native)."** The mesh overlay
+  (e.g. iroh) is modeled as *another (virtual) gateway* in Link's existing
+  per-gateway best-path model; a strict control/media split (reliable QUIC for
+  control, unreliable/timely datagrams for audio, with congestion-aware overlay
+  datagrams as the fix for the §5.8 self-starvation); coordination by **gossip +
+  deterministic tie-break, explicitly not Raft** — leaders reuse Link's session
+  election, and flow optimization converges on *shared objective inputs* (either
+  deterministic global recompute or distributed utility-max), not on consensus of
+  outputs, damped by Link's strictly-better-path hysteresis; and service order as
+  measured quality + policy composed feasibility-first (constraints filter,
+  preferences rank). Scoping fixed: the wire carries capability/topology encoding;
+  the routing algorithms live in `ipauro-mesh` (GPL), above the MIT tactus crate.
+- §9/§10 (provenance, open questions) updated; a new open question tracks the
+  topology/`tcap` gossip encoding boundary between spec and `ipauro-mesh`.
+
 ## [0.4.2] — 2026-07-03
 
 Upstream pin: `902aef95bf94af49746fdda5369b42cdcfa1e6d2` — unchanged.
