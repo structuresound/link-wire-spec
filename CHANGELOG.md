@@ -3,6 +3,54 @@
 All notable changes to this specification. Every entry records the upstream
 pin (`Ableton/link` commit) the spec describes at that version.
 
+## [0.4.2] — 2026-07-03
+
+Upstream pin: `902aef95bf94af49746fdda5369b42cdcfa1e6d2` — unchanged.
+
+Audio extension-envelope release: establishes, by probing the reference, how
+far a peer can push the LinkAudio v1 wire before a reference peer stops coping —
+the information needed to design a backward-compatible native audio mode.
+
+### Changed
+
+- **Chapter 3 (Audio):** added **§5.9 "Receive-side per-chunk frame limit"** —
+  the library decode path accepts up to the 1126-byte sample capacity, but the
+  reference *renderer* stages each delivered chunk in a fixed 512-sample buffer
+  and overruns it (heap corruption, process abort) on any single chunk above
+  **512 frames**. The limit is per-chunk, not per-datagram: a full 1200-byte
+  datagram of two 275-frame chunks is received cleanly, whereas one 550-frame
+  chunk aborts the process. Reference senders cap at 251 frames/chunk (§5.6), so
+  reference-to-reference traffic never reaches it. Normative: a sender to a v1
+  peer MUST keep chunks ≤ 512 frames; a receiver MUST bound its decode-to-render
+  copy. Cross-referenced from §5.6; **refines open question 03-2** (the
+  "no receive ceiling" resolution holds for the parse path, not the endpoint);
+  constants table extended. [B]
+
+### Added
+
+- **`spec/proposals/tactus-native-audio.md`** — a non-normative design study
+  answering whether a clean-room implementation (`tactus`) can carry a richer
+  audio protocol between its own peers while staying wire-compatible with Link.
+  Establishes the empirical backward-compat basis (reference ignores unknown
+  payload entries and unknown message types — probed), a feature grid against
+  AES67 / Dante / AVB, a `tcap` capability-negotiation mechanism, zero-negotiation
+  efficiency wins (fill the 1200-byte datagram at ≤512 frames/chunk ≈ 2.3× fewer
+  packets), native-mode extensions (codecs, FEC for the open-loop data plane,
+  optional multicast, jumbo chunks), the Link-ghost-time-vs-PTP clock gap, and a
+  transport-tier analysis including ad-hoc AVB over a dedicated point-to-point
+  link and an assessment of Apple USB/p2p networking as an AVB-class transport.
+
+### Evidence
+
+Extension-tolerance probe: minimal from-spec Link + LinkAudio peer vs reference
+`LinkAudioHut` (Link 4.0), isolated netns. Unknown `PeerAnnouncement` entry
+(`tcap`) → channel listed normally; type-7 + garbage to the audio endpoint →
+peer keeps operating; single-chunk frame sweep → clean ≤ 512, adjacent-state
+corruption 513–~518, heap-corruption abort ≳ 520; multi-chunk control → 2×275
+frames (1200-byte datagram) clean while 1×550 aborts. Mechanism confirmed by
+dirty-side source read (fixed 512-sample renderer buffer, unbounded per-chunk
+fill).
+
 ## [0.4.1] — 2026-07-02
 
 Upstream pin: `902aef95bf94af49746fdda5369b42cdcfa1e6d2` — unchanged.

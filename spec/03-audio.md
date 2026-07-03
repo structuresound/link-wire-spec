@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Spec version | 0.4.1 |
+| Spec version | 0.4.2 |
 | Upstream reference | Ableton/link @ `902aef95bf94af49746fdda5369b42cdcfa1e6d2` |
 | License | CC-BY-4.0 |
 
@@ -317,6 +317,12 @@ The 502-byte cap is [W]: every AudioBuffer in `audio-channel-lifecycle.pcap` car
 48 kHz stream is sent as ≈ 125-frame datagrams (roughly one datagram every 2.6 ms
 per channel); the captured mono stream carries 251 frames per datagram [W].
 
+**A receive-side limit the parse path does not express (§5.9):** the 1126-byte
+figure is what the *library decoder* accepts, but the reference audio *renderer*
+holds each delivered chunk's frames in a fixed 512-sample scratch buffer. A single
+chunk with more than 512 frames overflows it — so `numFrames` per chunk, not
+datagram size, is the operative receive limit against a reference peer. See §5.9.
+
 Note that the 576-byte aspiration holds exactly only for single-chunk datagrams
 (20 + 28 + 26 + 502 = 576); each additional chunk record adds 26 bytes beyond it.
 The flush condition counts sample bytes only [B], so multi-chunk datagrams slightly
@@ -366,6 +372,48 @@ can be delayed to bye-retransmission/ttl timescales. Deployments must provision
 capacity above the sum of all active streams; implementations SHOULD surface
 per-channel loss (from sequence-number gaps) so applications can react, since
 the protocol will not.
+
+### 5.9 Receive-side per-chunk frame limit
+
+The library decode path (§5.2) accepts any `numBytes` up to the 1126-byte sample
+capacity (§5.6). The reference *audio path that consumes decoded buffers* is
+stricter: it stages each delivered chunk's PCM into a fixed 512-sample scratch
+buffer and copies `numFrames` samples into it with no bound check. A single chunk
+whose `numFrames` exceeds **512** therefore writes past that buffer. Measured
+against the reference `LinkAudioHut` [B]:
+
+| Single-chunk `numFrames` | Observed effect |
+|---|---|
+| ≤ 512 | audio received normally |
+| 513–~518 | small overrun; audio still played, adjacent state corrupted |
+| ≳ 520 | heap corruption, process aborts (`double free or corruption`) |
+
+The limit is **per chunk, not per datagram**: a full 1200-byte datagram carrying
+two 275-frame chunks (550 frames total) is received cleanly, whereas one
+550-frame chunk in a *smaller* datagram aborts the process. This matches a
+`512`-element decoded-sample buffer filled once per chunk, and is independent of
+the 502-byte *sender* cap (§5.6), which keeps reference senders at 251
+frames/chunk — comfortably under 512, so reference-to-reference traffic never
+reaches the limit.
+
+Requirements:
+
+- **[N]** A sender interoperating with reference (v1) peers MUST keep each chunk's
+  `numFrames` ≤ 512. (Following the §5.6 502-byte cap satisfies this
+  automatically; the limit only becomes reachable for a sender that deliberately
+  emits larger chunks to exploit the 1200-byte datagram.) Larger chunks are safe
+  only after out-of-band capability negotiation confirms the peer accepts them
+  (see the native-audio proposal, `spec/proposals/tactus-native-audio.md`).
+- **[N]** A receiver MUST bound its decode-to-render copy by its own buffer
+  capacity and reject or split a chunk larger than it can stage, rather than
+  overrun — the reference's fixed 512-sample buffer is an implementation limit to
+  interoperate against, not a ceiling to reproduce.
+
+This refines open question 03-2 (§11): "no receive ceiling beyond the 1200-byte
+socket buffer" holds for the **library parse** path, but the reference **endpoint**
+(the renderer example that ships with LinkKit and underlies `LinkAudioHut`) imposes
+the 512-frame-per-chunk limit above. A datagram that parses is not necessarily one
+the reference endpoint can play.
 
 ## 6. Beat-time alignment
 
@@ -565,6 +613,7 @@ beginBeats, tempo, count, sessionId, sampleRate, numChannels) unit.
 | Chunk record size | 26 bytes |
 | Codec PCM i16 | 1 |
 | Non-audio allowance / sample capacity / sender sample cap | 50 / 1126 / 502 bytes |
+| Reference renderer per-chunk frame limit | 512 frames (interop constraint, §5.9) |
 | Beat value unit | micro-beats (beats × 10⁶), `i64` |
 | Tempo unit | µs per beat, `i64` |
 
@@ -576,9 +625,14 @@ All resolved — items 1–7 at v0.1.0, item 8 at v0.4.0 — each with the evide
 1. **Resolved [W]** — `_abu` is **not** written on the wire; AudioBuffer payloads
    begin bare with the channel id. Asserted over every AudioBuffer in
    `audio-channel-lifecycle.pcap` by `check_vectors.py`. See §5.1.
-2. **Resolved [B]** — receivers enforce **no** payload ceiling beyond the 1200-byte
-   socket buffer (≤1180 payload); the 24-byte budget is sender-side only. Not
-   exercised by any vector (no >1176 payload has been observed). See §3.1.
+2. **Resolved [B], refined (v0.4.1)** — the library *parse* path enforces no
+   payload ceiling beyond the 1200-byte socket buffer (≤1180 payload); the 24-byte
+   budget is sender-side only. But the reference *renderer* imposes a
+   **512-frame-per-chunk** limit that the parse path does not express: a chunk
+   above it overruns a fixed decoded-sample buffer and can abort the process
+   (§5.9). The operative receive limit against a reference endpoint is therefore
+   per-chunk frames, not payload bytes. Not exercised by any vector (reference
+   senders stay at 251 frames/chunk). See §3.1, §5.9.
 3. **Resolved [B]** — the 50-byte allowance is a hand-chosen fixed constant, not a
    computed minimum; the encoder subtracts the real chunk-list size at runtime. The
    resulting 502-byte sample cap is [W]. See §5.6.
