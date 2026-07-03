@@ -3,6 +3,152 @@
 All notable changes to this specification. Every entry records the upstream
 pin (`Ableton/link` commit) the spec describes at that version.
 
+## [0.4.3] — 2026-07-03
+
+Upstream pin: `902aef95bf94af49746fdda5369b42cdcfa1e6d2` — unchanged.
+
+Extends the (non-normative) `spec/proposals/tactus-native-audio.md` design study.
+No change to normative chapters beyond the version stamp.
+
+### Changed
+
+- **Reframed the proposal as *tactus-native*, not LinkAudio parity.** Link /
+  LinkAudio-v1 compatibility is stated as a graceful-degradation floor for mixed
+  sessions, not the design target; native-to-native traffic is unconstrained by
+  v1, and only the *fallback* is bounded by what a reference peer tolerates.
+- **Rewrote §7.2 (point-to-point over USB/Thunderbolt).** Corrects the earlier
+  "run software PTP, ~tens of µs" framing: hardware timestamping latches in the
+  MAC/PHY and is not exposed on Apple's USB/TB-net interfaces (SIP + signed-kext +
+  DriverKit make going around it unshippable), so software PTP is both fragile and
+  the *wrong tool* for a p2p link. A dedicated link doesn't need PTP: use
+  transport-native clocking (USB Audio Class async feedback / SOF reference) or
+  master-by-construction with receiver rate recovery; Thunderbolt (PCIe/DMA) beats
+  USB 2.0 (125 µs polled). PTP re-enters only on switched fabrics; if PHY
+  timestamping is truly required, add a PTP-capable USB3/TB Ethernet adapter.
+- **Added §8 "Control plane and mesh (tactus-native)."** The mesh overlay
+  (e.g. iroh) is modeled as *another (virtual) gateway* in Link's existing
+  per-gateway best-path model; a strict control/media split (reliable QUIC for
+  control, unreliable/timely datagrams for audio, with congestion-aware overlay
+  datagrams as the fix for the §5.8 self-starvation); coordination by **gossip +
+  deterministic tie-break, explicitly not Raft** — leaders reuse Link's session
+  election, and flow optimization converges on *shared objective inputs* (either
+  deterministic global recompute or distributed utility-max), not on consensus of
+  outputs, damped by Link's strictly-better-path hysteresis; and service order as
+  measured quality + policy composed feasibility-first (constraints filter,
+  preferences rank). Scoping fixed: the wire carries capability/topology encoding;
+  the routing algorithms live in `ipauro-mesh` (GPL), above the MIT tactus crate.
+- §9/§10 (provenance, open questions) updated; a new open question tracks the
+  topology/`tcap` gossip encoding boundary between spec and `ipauro-mesh`.
+
+## [0.4.2] — 2026-07-03
+
+Upstream pin: `902aef95bf94af49746fdda5369b42cdcfa1e6d2` — unchanged.
+
+Audio extension-envelope release: establishes, by probing the reference, how
+far a peer can push the LinkAudio v1 wire before a reference peer stops coping —
+the information needed to design a backward-compatible native audio mode.
+
+### Changed
+
+- **Chapter 3 (Audio):** added **§5.9 "Receive-side per-chunk frame limit"** —
+  the library decode path accepts up to the 1126-byte sample capacity, but the
+  reference *renderer* stages each delivered chunk in a fixed 512-sample buffer
+  and overruns it (heap corruption, process abort) on any single chunk above
+  **512 frames**. The limit is per-chunk, not per-datagram: a full 1200-byte
+  datagram of two 275-frame chunks is received cleanly, whereas one 550-frame
+  chunk aborts the process. Reference senders cap at 251 frames/chunk (§5.6), so
+  reference-to-reference traffic never reaches it. Normative: a sender to a v1
+  peer MUST keep chunks ≤ 512 frames; a receiver MUST bound its decode-to-render
+  copy. Cross-referenced from §5.6; **refines open question 03-2** (the
+  "no receive ceiling" resolution holds for the parse path, not the endpoint);
+  constants table extended. [B]
+
+### Added
+
+- **`spec/proposals/tactus-native-audio.md`** — a non-normative design study
+  answering whether a clean-room implementation (`tactus`) can carry a richer
+  audio protocol between its own peers while staying wire-compatible with Link.
+  Establishes the empirical backward-compat basis (reference ignores unknown
+  payload entries and unknown message types — probed), a feature grid against
+  AES67 / Dante / AVB, a `tcap` capability-negotiation mechanism, zero-negotiation
+  efficiency wins (fill the 1200-byte datagram at ≤512 frames/chunk ≈ 2.3× fewer
+  packets), native-mode extensions (codecs, FEC for the open-loop data plane,
+  optional multicast, jumbo chunks), the Link-ghost-time-vs-PTP clock gap, and a
+  transport-tier analysis including ad-hoc AVB over a dedicated point-to-point
+  link and an assessment of Apple USB/p2p networking as an AVB-class transport.
+
+### Evidence
+
+Extension-tolerance probe: minimal from-spec Link + LinkAudio peer vs reference
+`LinkAudioHut` (Link 4.0), isolated netns. Unknown `PeerAnnouncement` entry
+(`tcap`) → channel listed normally; type-7 + garbage to the audio endpoint →
+peer keeps operating; single-chunk frame sweep → clean ≤ 512, adjacent-state
+corruption 513–~518, heap-corruption abort ≳ 520; multi-chunk control → 2×275
+frames (1200-byte datagram) clean while 1×550 aborts. Mechanism confirmed by
+dirty-side source read (fixed 512-sample renderer buffer, unbounded per-chunk
+fill).
+
+## [0.4.1] — 2026-07-02
+
+Upstream pin: `902aef95bf94af49746fdda5369b42cdcfa1e6d2` — unchanged.
+
+Operating-envelope release: documents how the protocols behave at various
+latencies, loss rates, and throughputs. Motivated by an interop campaign
+(below) whose results the v0.4.0 text could not explain: sessions merge at
+round-trip times where §4.2 as previously written implies every measurement
+fails. All changes are additions and sharpenings; no retractions.
+
+### Changed
+
+- **Chapter 2 (Sync):** sharpened §4.2 — the 5-retry measurement budget is
+  **cumulative over a measurement's lifetime** and is never restored by pong
+  receipt; each retry adds an in-flight ping chain [B]. Documented pong
+  admission: pongs are correlated to measurements only by expected `sess`
+  (the reference offers every measurement-socket datagram to every
+  measurement in progress and continues each chain toward the pong's source
+  endpoint), so concurrent measurements expecting different sessions can
+  abort one another; implementations MAY correlate by source endpoint [N].
+  Added **§5.1 "Operating envelope: round-trip time"**: the derived
+  `(1 + 5) × 50 ms ≈ 300 ms` single-measurement viability bound; session
+  merging beyond the bound through cross-attempt pong inheritance via the
+  §7.1 forget→re-measure loop (probabilistic, seconds instead of
+  sub-second); loss consumes the same retry budget (merging intermittent at
+  10 % loss while in-session gossip keeps working); re-measurement
+  starvation — above the bound the 30 s re-measure loop never succeeds, the
+  ghost transform freezes at its join-time value, and drift correction
+  stalls while the session persists [B]. Cross-references added in §7.1 and
+  §7.3; constants table extended.
+- **Chapter 3 (Audio):** added **§5.8 "Throughput requirements
+  (informative)"** — the data plane is open-loop (no acknowledgement,
+  retransmission, congestion control, or rate adaptation); per-stream
+  bandwidth arithmetic (≈ 768 kbit/s per 48 kHz mono PCM stream, per
+  requester); on an undersized path the constant-rate stream saturates the
+  bottleneck and starves reverse-direction traffic (a reverse-direction
+  subscriber receives no audio; channel teardown can be delayed) [B].
+- **Conformance harness:** `run-isolated.sh` accepts `SHAPE` to run any
+  scenario under configured delay/jitter/loss/rate via the new
+  `tools/udp-shaper.py` (userspace NFQUEUE shaper for kernels without qdisc
+  modules; no protocol logic). README documents impaired-network runs and
+  the control-run methodology (compare candidate failures against a
+  reference-vs-reference control under the same impairment).
+- Chapter version stamps for chapters 2 and 3 bumped to 0.4.1.
+
+### Evidence
+
+Impairment sweep against the pinned reference build (Link 4.0 + examples-only
+commits), reference-vs-reference and reference-vs-candidate
+([link-wire-rs](https://github.com/structuresound/link-wire-rs)
+`conformance-peer`), all five harness scenarios per condition, on a shaped
+loopback in an isolated netns: one-way delay 10/50/100/200/300 ms with
+proportional jitter, loss 2/10 %, rate 20 Mbit/s–256 kbit/s. Both pairings
+pass everything through 100 ms one-way (RTT 200 ms), including beat phase
+within 0.01 beats and bidirectional audio; at 200–300 ms one-way both show
+the same probabilistic session-merge setup failures; at 10 % loss both merge
+intermittently; at 256 kbit/s both show the same reverse-direction audio
+subscription starvation. **No candidate-only divergence was observed at any
+operating point** — every deviation from ideal behavior reproduced in the
+reference-vs-reference control.
+
 ## [0.4.0] — 2026-06-11
 
 Upstream pin: `902aef95bf94af49746fdda5369b42cdcfa1e6d2` (2026-05-19) — unchanged

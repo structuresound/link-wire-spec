@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Spec version | 0.4.0 |
+| Spec version | 0.4.1 |
 | Upstream reference | Ableton/link @ `902aef95bf94af49746fdda5369b42cdcfa1e6d2` |
 | License | CC-BY-4.0 |
 
@@ -132,11 +132,32 @@ measurement are [W] in every discovery vector.
 - On each valid pong for the current measurement, *immediately* send the next ping
   `{__ht = now, _pgt = pong.__gt}` — the chain is paced by the network round trip,
   not by a timer.
-- **Retry/timeout:** a 50 ms timer is re-armed on every ping. If it fires (no pong
-  within 50 ms), send a fresh ping `{__ht = now}` (without `_pgt`). After **5** such
-  timer-driven retries, the measurement **fails** and collected data is discarded.
-- **Session check:** if a pong's `sess` differs from the session id of the peer
-  being measured (as known at measurement start), the measurement fails immediately.
+- **Retry/timeout:** a 50 ms timer is re-armed on every ping (initial, chain, or
+  retry). If it fires (no pong within 50 ms of the most recent ping), send a fresh
+  ping `{__ht = now}` (without `_pgt`). The retry budget is **cumulative over the
+  measurement's lifetime**: receiving a pong re-arms the timer but does **not**
+  restore the budget. After **5** timer-driven retries, the next expiry **fails**
+  the measurement and collected data is discarded. Note that each retry also adds
+  one in-flight ping *stream* — every pong extends its own chain — so on a slow
+  path a measurement runs up to 6 concurrent chains whose pongs interleave; the
+  measurement survives as long as inter-pong gaps over 50 ms occur at most 5 times
+  in total (see §5.1 for the resulting viability bound).
+- **Pong admission:** pongs are not correlated with the eliciting ping, nor with
+  the measurement's target endpoint. The reference offers every datagram arriving
+  on the gateway's measurement socket to every measurement in progress; a
+  measurement accepts any Pong whose `sess` matches the expected session, takes
+  its samples entirely from the pong's own and echoed entries (§5), and sends
+  that chain's next ping to the *pong's source endpoint*. This statelessness is
+  what makes cross-attempt inheritance possible (§5.1). Implementations MAY
+  additionally require the pong's source endpoint to match the measured peer's
+  measurement endpoint [N]; since pings are only ever sent there, this filters
+  nothing but foreign traffic.
+- **Session check:** if an accepted pong's `sess` differs from the session id of
+  the peer being measured (as known at measurement start), the measurement fails
+  immediately. Because the reference fans incoming pongs out to every measurement
+  in progress (previous bullet), a pong belonging to one measurement aborts any
+  concurrent measurement that expects a *different* session; implementations that
+  correlate pongs by source endpoint avoid this mutual-abort behavior [N].
 
 ### 4.3 Responder behavior
 
@@ -182,6 +203,63 @@ round trips ([Goltz 2018]). The sampling formulas, the >100 threshold, and the
 median are [B] — the filter runs inside the initiator and leaves no distinct wire
 trace beyond the chain length. Implementations MAY use a different robust estimator
 [N]; the wire format does not constrain the filter, only the message exchange.
+
+### 5.1 Operating envelope: round-trip time
+
+The retry rules of §4.2 impose a hard viability bound on any *single* measurement,
+and the session machinery of §7.1 relaxes it for session merging as a whole. All
+[B] — reference analysis confirmed by runtime experiment (reference-vs-reference
+peers on a shaped loopback link, using the conformance harness).
+
+**Single-measurement bound.** The initial ping and the 5 timer-driven retries are
+all sent within 250 ms of measurement start (50 ms apart); the timer expiry that
+follows the fifth retry fails the measurement at ≈ 300 ms. A measurement can
+therefore only complete if its first pong arrives within
+`(1 + max retries) × 50 ms ≈ 300 ms` of the initial ping: **a path whose round
+trip reaches 300 ms fails every individual measurement attempt.** Below the bound,
+bootstrap timeouts consume `floor(RTT / 50 ms)` of the budget before the first
+pong arrives, leaving that many concurrent ping chains in flight; the chains then
+deliver pongs ≈ 50 ms apart, sustaining the measurement with the remaining budget
+as jitter margin. Chain length still means measurement duration grows with RTT
+(> 100 samples ≈ 50 round trips split across the chains): fractions of a second
+on a LAN, seconds at hundreds of milliseconds RTT.
+
+**Session merging beyond the bound (cross-attempt inheritance).** A failed *join*
+measurement causes the foreign session to be forgotten (§7.1); the next Alive or
+Response naming that session — nominally within 250 ms (Chapter 1 §4.1) — makes
+it brand-new again and triggers a fresh measurement. Because the responder is
+stateless (§4.3) and every per-ping quantity is recovered from the pong's echo
+(§4.1, §5), pongs elicited by an earlier, already-failed attempt are valid inputs
+to the current attempt: they arrive on the same measurement socket and carry the
+expected `sess` (§4.2 pong admission). Each attempt contributes up to 6 ping
+chains, so successive attempts accumulate in-flight chains until pong gaps drop
+under 50 ms and a chain sustains itself. Session merging therefore still
+completes well above the 300 ms bound — but probabilistically and slowly rather
+than deterministically. Measured with reference peers on an otherwise clean
+shaped link: at RTT ≈ 400–600 ms merges typically completed in 3–7 s (versus
+sub-second on a LAN), with intermittent failures to complete within an 8 s
+window at both operating points. Tempo, start/stop, and timeline gossip
+(multicast, Chapter 1) are unaffected by RTT once peers share a session.
+
+**Packet loss consumes the same budget.** A lost ping or pong leaves a > 50 ms
+gap in its chain, indistinguishable from a slow path: it costs one unit of the
+cumulative 5-retry budget. Over a chain of ~50 round trips (~100 datagrams each
+way), sustained loss of a few percent regularly exhausts the budget; at 10 %
+loss most single measurements fail and session merges succeed only
+intermittently via re-attempts (measured, reference-vs-reference [B]). Discovery
+and timeline gossip tolerate loss far better by design — a peer survives ~20
+missed Alives (Chapter 1 §7) and every Alive re-carries the full state — so at
+loss rates that stall session *merging*, peers already sharing a session keep
+following tempo and transport changes.
+
+**Re-measurement starvation above the bound.** The periodic 30 s re-measurement
+of the current session (§7.3) has no fast retry loop: a failure schedules the
+next attempt 30 s later, by which time no pongs from the failed attempt survive,
+so cross-attempt inheritance never occurs for it. Above the single-measurement
+bound, a joined peer's re-measurements therefore always fail: its ghost
+transform stays frozen at the join-time value and clock drift between session
+members is no longer corrected (slope is fixed at 1, §2). The session itself
+persists — only drift correction stalls.
 
 ## 6. The session timeline (`tmln`)
 
@@ -244,8 +322,10 @@ current session:
    target the session's *founding peer* if it is visible (the peer whose NodeId
    equals the session id), otherwise any known member of it.
 2. On measurement failure, the foreign session is forgotten (it will be re-measured
-   if seen again). On success the observer now has `G_new` for the foreign session
-   and decides whether to join (§7.2).
+   if seen again — with the nominal Alive period this re-attempt loop runs every
+   ≈ 250 ms; §5.1 describes how it lets merges complete beyond the
+   single-measurement round-trip bound). On success the observer now has `G_new`
+   for the foreign session and decides whether to join (§7.2).
 
 ### 7.2 Join rule
 
@@ -288,7 +368,8 @@ same beat-origin priority rule as the current session's (§6 rule 2) [B].
   session it founded does not re-measure it — its transform is exact by
   construction; the joining members are the measuring side [B]. This bounds clock
   drift between session members (slope is fixed at 1, so drift appears as a slowly
-  changing offset).
+  changing offset). Above the single-measurement round-trip bound the 30 s loop
+  never succeeds and drift correction stalls — see §5.1.
 - When the last other member of the session disappears (Chapter 1 §7), the peer
   **founds a fresh session**: new random NodeId, sessionId = NodeId, new transform
   `(1, −now)`, and a new timeline constructed so the local beat/tempo continue
@@ -401,7 +482,8 @@ the protocol boundary; no other peer's host clock is ever observable.
 | Message types | Ping=1, Pong=2 |
 | Max message size | 512 bytes (encoder limit 511) |
 | Responder max accepted ping payload | 32 bytes |
-| Retry timer / max retries | 50 ms / 5 |
+| Retry timer / max retries | 50 ms / 5 (budget cumulative per measurement; never restored by pongs) |
+| Single-measurement viability bound | first pong within (1 + 5) × 50 ms ≈ 300 ms of measurement start (derived; §5.1) |
 | Samples required | > 100 (two per round trip after the first) |
 | Offset filter | median |
 | Ghost transform slope | 1 (fixed) |

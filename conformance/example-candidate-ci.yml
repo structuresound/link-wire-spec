@@ -54,6 +54,7 @@ jobs:
           CANDIDATE_FEATURES: ""
           LINK_CAPTURE_WORK: ${{ runner.temp }}/link-reference
         run: |
+          set -o pipefail
           sudo --preserve-env=CANDIDATE_CMD,CANDIDATE_FEATURES,LINK_CAPTURE_WORK \
             bash "$RUNNER_TEMP/link-wire-spec/conformance/run-isolated.sh" \
             | tee conformance-observations.txt

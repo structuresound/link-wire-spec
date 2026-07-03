@@ -9,6 +9,10 @@
 #
 # Env passthrough: CANDIDATE_CMD, CANDIDATE_AUDIO_CMD, CANDIDATE_FEATURES —
 # see conformance/README.md. Requires root (netns + reference build deps).
+#
+# Optional: SHAPE="--delay 50 --jitter 10 [--loss 2] [--rate 512]" applies
+# network impairment to all UDP inside the namespace via tools/udp-shaper.py
+# (see "Impaired-network runs" in conformance/README.md).
 # License: MIT
 
 set -euo pipefail
@@ -26,8 +30,22 @@ shift # --inner
 ip link set lo up
 
 JACK_PID=""
-cleanup() { [ -n "$JACK_PID" ] && kill "$JACK_PID" 2>/dev/null || true; }
+SHAPER_PID=""
+cleanup() {
+  [ -n "$JACK_PID" ] && kill "$JACK_PID" 2>/dev/null || true
+  [ -n "$SHAPER_PID" ] && kill "$SHAPER_PID" 2>/dev/null || true
+}
 trap cleanup EXIT
+
+if [ -n "${SHAPE:-}" ]; then
+  iptables -A OUTPUT -o lo -p udp -j NFQUEUE --queue-num 1 --queue-bypass
+  # shellcheck disable=SC2086
+  python3 "$REPO_DIR/tools/udp-shaper.py" $SHAPE \
+    >/tmp/conformance-shaper.log 2>&1 &
+  SHAPER_PID=$!
+  sleep 1
+  echo "[conformance] shaping UDP: $SHAPE" >&2
+fi
 
 if command -v jackd >/dev/null; then
   JACK_NO_AUDIO_RESERVATION=1 jackd -r -d dummy -r 48000 -p 256 \
@@ -40,4 +58,5 @@ else
   export CONFORMANCE_AUDIO=0
 fi
 
-exec python3 "$REPO_DIR/conformance/run.py" "$@"
+# No exec: the EXIT trap must fire afterwards to reap jackd and the shaper.
+python3 "$REPO_DIR/conformance/run.py" "$@"

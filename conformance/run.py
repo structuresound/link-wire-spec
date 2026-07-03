@@ -179,13 +179,16 @@ def scenario_tempo_follow():
     try:
         if not join(ref, cand, s):
             return
-        cand.send("tempo 100")
-        ok, dt = ref.wait(lambda st: abs(st.get("tempo", 0) - 100.0) < 0.01, 5)
-        obs(s, ok, f"reference adopted candidate's tempo 100 bpm in {dt:.1f}s"
+        # Tempo deltas stay small (<= 6 bpm per change): a reference hut is
+        # driven by single-bpm keypresses that it consumes at only a few
+        # per second, so the time window covers stepping + adoption.
+        cand.send("tempo 116")
+        ok, dt = ref.wait(lambda st: abs(st.get("tempo", 0) - 116.0) < 0.01, 8)
+        obs(s, ok, f"reference adopted candidate's tempo 116 bpm in {dt:.1f}s"
                    f" (reference reports {ref.latest.get('tempo')})")
-        ref.send("tempo 124")
-        ok, dt = cand.wait(lambda st: abs(st.get("tempo", 0) - 124.0) < 0.01, 5)
-        obs(s, ok, f"candidate adopted reference's tempo 124 bpm in {dt:.1f}s"
+        ref.send("tempo 121")
+        ok, dt = cand.wait(lambda st: abs(st.get("tempo", 0) - 121.0) < 0.01, 8)
+        obs(s, ok, f"candidate adopted reference's tempo 121 bpm in {dt:.1f}s"
                    f" (candidate reports {cand.latest.get('tempo')})")
     finally:
         ref.stop()
