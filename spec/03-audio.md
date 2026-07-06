@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Spec version | 0.4.3 |
+| Spec version | 0.5.0 |
 | Upstream reference | Ableton/link @ `902aef95bf94af49746fdda5369b42cdcfa1e6d2` |
 | License | CC-BY-4.0 |
 
@@ -402,8 +402,9 @@ Requirements:
   `numFrames` ≤ 512. (Following the §5.6 502-byte cap satisfies this
   automatically; the limit only becomes reachable for a sender that deliberately
   emits larger chunks to exploit the 1200-byte datagram.) Larger chunks are safe
-  only after out-of-band capability negotiation confirms the peer accepts them
-  (see the native-audio proposal, `spec/proposals/tactus-native-audio.md`).
+  only after capability negotiation confirms the peer accepts them — now
+  specified normatively in Chapter 4 (`tcap` TLV 2, Ch. 4 §7.2; rationale in
+  `spec/proposals/tactus-native-audio.md`).
 - **[N]** A receiver MUST bound its decode-to-render copy by its own buffer
   capacity and reject or split a chunk larger than it can stage, rather than
   overrun — the reference's fixed 512-sample buffer is an implementation limit to
