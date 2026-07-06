@@ -3,6 +3,75 @@
 All notable changes to this specification. Every entry records the upstream
 pin (`Ableton/link` commit) the spec describes at that version.
 
+## [0.5.0] — 2026-07-06
+
+Upstream pin: `902aef95bf94af49746fdda5369b42cdcfa1e6d2` — unchanged (and not
+applicable to the new chapter, which has no upstream).
+
+First native-protocol release: the tactus-native design study graduates to a
+**draft-normative Chapter 4** pinning the bytes two independent implementations
+need to interoperate. Closes proposal open questions §10.1/§10.2/§10.3/§10.5/
+§10.6 (spec-backlog items D3, D4, D6); §10.4 (measured p2p sync precision)
+remains open.
+
+### Added
+
+- **`spec/04-native-audio.md`** (draft-normative; original protocol, clean by
+  construction — the provenance firewall applies only to its cited v1 facts):
+  - **`tcap` assigned final** (`0x74636170`) with a versioned TLV capability
+    block (types 1–8: decode codecs, max chunk frames, multicast group, FEC
+    schemes, clock domains, latency target, flags, max datagram) and an
+    allocation policy (9–`0x7FFF` spec-assigned, `0x8000`–`0xFFFF` private).
+    `tcap` rides PeerAnnouncements (standing capabilities) and ChannelRequests
+    (per-subscription receive constraints).
+  - **Grant-free upgrade handshake**: negotiation only establishes the
+    receiver's envelope; the sink chooses within it and every datagram is
+    self-describing. Sources always attach `tcap` to requests (reference sinks
+    skip it), always accept both v1 (type 6) and native (type 16) media, and
+    the per-channel chunk sequence is continuous across format switches — so
+    upgrade, downgrade, and every fallback trigger are seamless by construction.
+  - **NativeMedia (type 16)**: v1 framing and endpoints; per-channel datagram
+    sequence; codec registry with real negotiation and mandatory rejection of
+    unknown codecs (fixes the ch. 03 §5.4 silent mis-decode); PCM i16/i24/f32,
+    FLAC, and Opus with per-codec validation; chunks independently decodable
+    with per-chunk coded lengths; optional media-clock stamping (10-byte
+    clock-domain record + `u64` ns per chunk) alongside always-mandatory beat
+    time.
+  - **NativeRepair (type 17)**: FEC over windows (2–32) of media datagrams —
+    XOR parity (any 1 loss) and a minimal RaptorQ (RFC 6330) profile with
+    inline OTI — addressing the ch. 03 §5.8 open-loop loss weakness without a
+    feedback channel.
+  - **Multicast**: one administratively-scoped group per sink per gateway
+    (TLV 3); receivers join via IGMP/MLD, filter by (NodeId, channel, session),
+    and fall back to unicast after 2 s of group silence; v1 requesters keep
+    conformant unicast copies concurrently.
+  - **Sizing/latency**: 512-frame default-and-minimum chunk ceiling (the
+    ch. 03 §5.9 constant, so TLV-2-ignorant implementations are safe by
+    default), 1200-byte default-and-minimum datagram size, and nanosecond
+    latency targets with a smallest-target-wins batching rule.
+  - **Mesh gossip records**: Ed25519 mesh identity with self-certifying
+    NodeId↔key binding; a signed, origin-sequenced envelope; PeerRecord /
+    LinkRecord / DemandRecord / PolicyRecord bodies; freshest-wins per subject,
+    with the policy epoch as the only strongly-ordered datum
+    (highest-epoch/lowest-key); trust modes (open/roster/pinned); role election
+    by byte-wise smallest key over gossiped candidates — encodings in the spec,
+    routing algorithms in `ipauro-mesh` (the §10.6 boundary, drawn).
+  - **Evidence-model rebase for native content** (backlog D7b, scoped to the
+    chapter): [W] redefined as tactus golden captures (candidate-vs-candidate),
+    new [D] design-rationale class, [B] reserved for cited v1 facts. The
+    chapter holds Draft-normative status until captures cover §4–§6.
+  - Interim security considerations (unauthenticated datagram plane, multicast
+    surface, gossip replay bounds) pending the dedicated chapter (backlog D7a).
+
+### Changed
+
+- **Chapter 0:** scope list and transport table gained Chapter 4 rows; stamp
+  bumped to 0.5.0.
+- **Chapter 3:** §5.9 now points to ch. 04 §7.2 for the negotiated ceiling
+  (was: proposal only); stamp bumped to 0.5.0.
+- **Proposal:** marked as the rationale record superseded on wire matters by
+  Chapter 4; §10 updated to track closed vs open questions.
+
 ## [0.4.3] — 2026-07-03
 
 Upstream pin: `902aef95bf94af49746fdda5369b42cdcfa1e6d2` — unchanged.

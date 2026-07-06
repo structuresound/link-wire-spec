@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | Draft / design study |
+| Status | Rationale record — wire encodings now pinned normatively in `spec/04-native-audio.md` (0.5.0); where the two disagree, Chapter 4 wins |
 | Targets | link-wire-spec ≥ 0.4.1; LinkAudio v1 (ch. 03) as a compatibility floor |
 | License | CC-BY-4.0 |
 | Provenance | Dirty-side design note. Documents a protocol a clean-room implementation (`tactus`) MAY build; contains no reference-source expression. |
@@ -430,23 +430,26 @@ wire carries.
 
 ## 10. Open questions
 
-1. **`tcap` fourcc/registry.** `tcap` and the TLV type numbers here are placeholders;
-   a real assignment (and a small registry section) is needed before any two
-   implementations interoperate.
-2. **Native data-plane message type + layout** are sketched (§5), not specified.
-   A follow-up chapter (`04-native-audio`) would pin the type number, payload
-   grammar, FEC framing, and multicast join.
-3. **Clock-domain stamping format** (§6 type-5): how a media-clock timestamp
-   (recovered rate, or PTP/gPTP where present) rides alongside beat-time in a
-   native chunk.
-4. **p2p sync precision** (§7.2) is asserted from transport structure, not measured.
-   A capture on real Apple USB/Thunderbolt p2p hardware would move the T1/T2
-   placement from reasoned to observed — the same [B]→[W] gap the spec tracks
-   elsewhere.
-5. **Interaction with the §5.9 512-frame limit** for *tactus receivers*: `tcap`
-   type 2 advertises each peer's true ceiling, but a default safe value and the
-   fallback when type 2 is absent need fixing.
-6. **Topology/`tcap` gossip encoding** (§8): the wire form of the mesh's
-   capability and link-quality records — the boundary between what the spec fixes
-   (encoding, so implementations interoperate) and what `ipauro-mesh` owns (the
-   routing algorithm) needs drawing precisely.
+Questions 1, 2, 3, 5, and 6 are **closed by Chapter 4** (spec 0.5.0); the
+entries below record what was open and where each answer landed. Question 4
+remains open (tracked in ch. 04 §12).
+
+1. **Closed (ch. 04 §2).** `tcap` = `0x74636170` assigned final; TLV types 1–8
+   pinned with a registry and allocation policy (9–`0x7FFF` spec-assigned,
+   `0x8000`–`0xFFFF` private).
+2. **Closed (ch. 04 §4–§6).** Native media = message type 16, repair = 17;
+   payload grammar, per-chunk coded lengths, FEC framing (XOR window + RaptorQ
+   profile), and multicast join/filter semantics pinned.
+3. **Closed (ch. 04 §4.3, §8).** A clocked flag adds a 10-byte clock-domain
+   record to the datagram header and a `u64` nanosecond domain timestamp per
+   chunk, alongside beat time (which remains mandatory).
+4. **Open.** p2p sync precision (§7.2) is asserted from transport structure, not
+   measured. A capture on real Apple USB/Thunderbolt p2p hardware would move the
+   T1/T2 placement from reasoned to observed — the same [B]→[W] gap the spec
+   tracks elsewhere.
+5. **Closed (ch. 04 §7.2).** Default and minimum chunk ceiling = 512 frames
+   (the ch. 03 §5.9 constant); TLV 2 raises it per peer.
+6. **Closed (ch. 04 §9).** Four signed, origin-sequenced gossip records
+   (Peer/Link/Demand/Policy) pinned; the spec fixes identity, envelope, bodies,
+   and adoption/ordering rules, and the routing algorithms stay in
+   `ipauro-mesh`.

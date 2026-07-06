@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Spec version | 0.4.0 |
+| Spec version | 0.5.0 |
 | Upstream reference | Ableton/link @ `902aef95bf94af49746fdda5369b42cdcfa1e6d2` |
 | License | CC-BY-4.0 |
 
@@ -21,6 +21,10 @@ LinkAudio v1 extension:
 - **Chapter 2 (Sync):** clock measurement (ping/pong) and the tempo/beat timeline model.
 - **Chapter 3 (Audio):** the LinkAudio v1 protocol for announcing, requesting, and
   streaming audio channels between peers, with beat-aligned scheduling.
+- **Chapter 4 (Native audio):** the tactus-native extension — capability negotiation
+  (`tcap`), a negotiated-codec/FEC/multicast data plane on new message types, media
+  clock domains, and the mesh gossip records. Original protocol (no upstream
+  reference); v1 compatibility is its degradation floor.
 
 This chapter defines terminology, the transport layout, and the **common serialization
 rules** that every other chapter depends on.
@@ -65,6 +69,7 @@ question, which class its verdict rests on.
 | Discovery responses (Chapter 1) | UDP unicast (back to sender) | sender's endpoint | 512 bytes | ASCII `_asdp_v` + byte `0x01` |
 | Sync measurement (Chapter 2) | UDP unicast | advertised measurement endpoint (ephemeral port) | — | see Chapter 2 |
 | LinkAudio v1 (Chapter 3) | UDP unicast only | advertised audio endpoint (ephemeral port) | 1200 bytes | ASCII `chnnlsv` + byte `0x01` |
+| Tactus native audio (Chapter 4) | UDP unicast + administratively-scoped multicast | advertised audio endpoint; advertised multicast group | 1200 bytes unless negotiated higher (Ch. 4 §7.1) | ASCII `chnnlsv` + byte `0x01` |
 
 All LinkAudio v1 traffic — announcements, requests, keepalives, and audio — is
 **unicast**; only Link discovery uses multicast. Audio endpoints are bound with an
