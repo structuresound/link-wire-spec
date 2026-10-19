@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Spec version | 0.4.1 |
+| Spec version | 0.5.1 |
 | Upstream reference | Ableton/link @ `902aef95bf94af49746fdda5369b42cdcfa1e6d2` |
 | License | CC-BY-4.0 |
 
@@ -370,8 +370,9 @@ same beat-origin priority rule as the current session's (§6 rule 2) [B].
   drift between session members (slope is fixed at 1, so drift appears as a slowly
   changing offset). Above the single-measurement round-trip bound the 30 s loop
   never succeeds and drift correction stalls — see §5.1.
-- When the last other member of the session disappears (Chapter 1 §7), the peer
-  **founds a fresh session**: new random NodeId, sessionId = NodeId, new transform
+- When the last other member of the session disappears (Chapter 1 §7), whether by
+  ByeBye, ttl expiry, or the local closing of the gateway(s) it was known through
+  (Chapter 1 §9.4), the peer **founds a fresh session**: new random NodeId, sessionId = NodeId, new transform
   `(1, −now)`, and a new timeline constructed so the local beat/tempo continue
   seamlessly. [W: in `discovery-join-leave.pcap` the surviving peer reappears under
   a new NodeId after the other's ByeBye — three NodeIds for two processes in the
