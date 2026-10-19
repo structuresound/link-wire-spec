@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Spec version | 0.4.0 |
+| Spec version | 0.5.1 |
 | Upstream reference | Ableton/link @ `902aef95bf94af49746fdda5369b42cdcfa1e6d2` |
 | License | CC-BY-4.0 |
 
@@ -68,8 +68,9 @@ Socket configuration facts with wire-visible consequences [B]:
   shows one NodeId announcing from two source addresses [W]).
 
 Self-messages are suppressed by node id (§5) [B]. The reference scans the interface
-list every **5 seconds** and opens/closes gateways as interfaces come and go [B].
-IPv4 is used on every running interface; IPv6 is additionally used on interfaces
+list every **5 seconds** and opens/closes gateways as interfaces come and go [B];
+which addresses become gateways, when a change takes effect, and what closing a
+gateway does are specified in §9. IPv4 is used on every running interface; IPv6 is additionally used on interfaces
 that also have IPv4, and **only with non-loopback link-local addresses**
 (`fe80::/10`) — every platform scanner with an IPv6 path applies this filter, so
 every IPv6 gateway, and hence every IPv6 endpoint advertised in peer state (§6), is
@@ -151,8 +152,9 @@ Response — this is what terminates the exchange [B].
 
 ### 4.3 ByeBye
 
-Sent to the multicast group(s) when a peer shuts down a gateway (application exit or
-Link disable). Header `ttl` is 0 and the payload is empty [W: 20-byte ByeBye
+Sent to the multicast group(s) whenever a peer closes a gateway, whatever the cause:
+application exit, Link disable, or a rescan that no longer admits the gateway's address
+(§9.3). Header `ttl` is 0 and the payload is empty [W: 20-byte ByeBye
 datagrams in `discovery-join-leave.pcap`, see its manifest]: the message means only
 "forget node `ident` on this gateway". A ByeBye is best-effort; peers that miss it
 fall back to ttl expiry (§7).
@@ -232,7 +234,7 @@ Each gateway keeps a table of known peers with an expiry deadline per peer:
 | Alive / Response received | entry created or refreshed; deadline := now + header `ttl` seconds; state replaced by the message's payload |
 | ByeBye received | entry removed immediately; a ByeBye naming a peer not in the table has no effect [B] |
 | deadline passed | entry removed by the prune timer |
-| gateway closed locally | all entries for that gateway removed |
+| gateway closed locally (exit, disable, or rescan; §9.3) | all entries for that gateway removed |
 
 The prune timer is scheduled for the **earliest deadline + 1 second** (padding
 against over-eager timeouts); each pruning pass removes every entry whose deadline
@@ -268,3 +270,169 @@ endpoint learning of Chapter 3 §2.
 | Prune-timer padding | 1 s |
 | Interface rescan period | 5 s |
 | Payload entry keys | `tmln` `0x746d6c6e`, `sess` `0x73657373`, `stst` `0x73747374`, `mep4` `0x6d657034`, `mep6` `0x6d657036`, `aep4` `0x61657034`, `aep6` `0x61657036` |
+
+## 9. Gateway lifecycle
+
+This section settles when a peer's gateways come into being and go away, and what
+becomes of the peers it learned through a gateway that is gone. None of it changes a
+byte on the wire; it fixes the *timing* of the messages of §4 and the peer-table
+effects of §7 around interface changes. Unless marked otherwise, the [B] statements
+below were confirmed by runtime experiment with the pinned reference build: two
+reference peers on a bridged two-host LAN, with addresses removed, replaced and
+added, and links taken down and up, while both hosts captured traffic (see CHANGELOG
+0.5.1, Evidence).
+
+### 9.1 What a gateway is keyed by
+
+A gateway is identified by its **local address alone** (Chapter 0 §2):
+
+- One interface that carries several addresses yields one gateway per address. Each
+  of them announces separately under the same NodeId (one Alive per address per
+  round, exactly as for a multi-homed host, §2) [B].
+- An address that the scan reports more than once (for example on two interfaces)
+  yields one gateway [B].
+- A peer MUST NOT run two gateways for the same local address at the same time [N].
+
+### 9.2 Which addresses are admitted
+
+On POSIX platforms the reference admits **every IPv4 address whose interface reports
+the running state**, and tests nothing else [B]. In particular all of the following
+become gateways when their interface is running:
+
+| Address / interface kind | Admitted by the reference | Notes |
+|---|---|---|
+| Loopback (`127.0.0.1` on Linux `lo`) | yes | `lo` carries no multicast flag; that does not matter (§2: this is the same-host discovery path) |
+| Further aliases on an interface | yes | one gateway each (§9.1) |
+| IPv4 link-local (`169.254.0.0/16`) | yes | observed announcing alongside a routable address on the same interface |
+| Interface without the multicast flag | yes | observed announcing Alives from such an address |
+| Point-to-point / tunnel interface | yes, when running | the scan does not consult the point-to-point flag |
+| Interface that is up but not running (e.g. no carrier) | no | |
+
+IPv6 admission is as stated in §2. The reference's Windows scan takes every IPv4
+unicast address the operating system lists for each adapter and does not test adapter
+operational state itself [B].
+
+Admission is **local policy**. It has no wire effect beyond deciding where a peer can
+be discovered, and it is not a conformance requirement:
+
+- An implementation SHOULD admit a loopback address, so that peers on the same host
+  discover each other (§2) [N].
+- An implementation MAY admit fewer kinds of interface than the reference (for
+  example none without the multicast flag, no point-to-point links, no link-local
+  addresses) [N]. The only consequence is that a peer reachable solely over an
+  excluded interface is not discovered there. Admitting more kinds than the
+  reference has no interoperability cost either.
+
+A gateway that cannot be opened (a socket call fails) is skipped without affecting
+the other gateways. Its address is tried again on every later scan for as long as it
+remains admitted [B].
+
+If the interface list cannot be read at all, the reference treats the scan as an
+empty list, so every gateway closes until a later scan succeeds [B]. Implementations
+MAY instead keep the current gateway set when a scan fails [N].
+
+### 9.3 When gateways open and close
+
+The gateway set changes **only at scans** [B]:
+
+| Moment | Effect |
+|---|---|
+| Link enabled | the set starts empty and a scan runs at once; each admitted address opens a gateway and announces immediately (§4.1) |
+| Every **5 s** after the previous scan, while enabled | scan: addresses no longer admitted close their gateways; newly admitted addresses open gateways |
+| Link disabled / application exit | every gateway closes |
+
+Within one scan, **all closures are carried out before any opening** [B].
+
+The following consequences of scanning describe what a reference peer will be seen
+to do. No peer depends on them for interoperability, so implementations need not
+reproduce them exactly:
+
+- **Changes between two scans are invisible.** An address that disappears and comes
+  back, or an interface that loses its running state and regains it, between two
+  consecutive scans causes no close and no open. Observed: a link held down for 3 s
+  produced no gateway change, no NodeId change, and no peer loss on either side (the
+  gap was shorter than the remote peers' ttl) [B].
+- **Detection latency.** A change is acted on at the next scan, so up to 5 s after
+  it happens.
+- **A gateway can outlive its address.** Between the moment its address is removed
+  (or its interface stops running) and the next scan, the gateway is still open.
+  Every send it attempts in that window fails and is dropped silently; the failure
+  does not close the gateway early [B]. On hosts where a multicast group membership
+  is tied to the interface rather than the address (Linux), such a gateway can also
+  keep receiving discovery multicast that arrives on that interface, including from
+  a different network the interface has since joined; whatever it learns is
+  attributed to it and removed with it (§9.4).
+- **An address change is a close plus an open.** Replacing the address on an
+  interface that stays up closes the old address's gateway and opens one on the new
+  address in the same scan. The new gateway's first Alive goes out straight away
+  (§4.1) and carries the peer's NodeId as it stands at that moment (but see §9.5).
+
+### 9.4 Closing a gateway
+
+Closing a gateway has the same effects whatever caused it (scan, disable or exit):
+
+1. **ByeBye.** The peer sends a ByeBye (§4.3) on the gateway as it closes [B]. An
+   implementation SHOULD do the same for every close, scan-driven ones included [N].
+   The send is best-effort: when the close is due to the address having gone, the
+   socket usually can no longer send, and nothing appears on the wire. Observed: on
+   address removal, address replacement and loss of the running state, no ByeBye from
+   the closing gateway reached the other host; that host dropped the entry by ttl
+   expiry, between ttl and ttl + 1 s after the last Alive it had received from that
+   address (§7) [B]. A receiving peer MUST NOT rely on a ByeBye to learn that a
+   remote gateway has gone [N].
+2. **Peer entries.** Every (peer, gateway) entry of that gateway is removed (§7).
+   This includes entries for peers that the gateway learned in the window described
+   in §9.3. A peer that still has an entry on another open gateway remains known.
+3. **Other per-gateway state.** LinkAudio channel entries of the gateway are removed
+   (Chapter 3 §7.3).
+4. **Session loss.** If, after the removal, no remaining entry on any gateway
+   belongs to a member of the peer's current session, the peer has lost the last
+   member of its session and performs the reset of Chapter 2 §7.3 (new NodeId, new
+   session), exactly as if that member had expired or said ByeBye [B]. The test
+   counts distinct NodeIds across all gateways; the reset happens only when that count
+   goes from non-zero to zero. A peer that is alone in its session does not reset
+   when a gateway closes.
+
+### 9.5 Ordering of a session reset against gateways opened in the same scan
+
+In the reference, the reset of §9.4 step 4 takes effect *after* the scan that caused
+it has finished. A gateway opened in the same scan has therefore already sent its
+immediate first Alive under the **previous** NodeId and session. Alives under the new
+identity follow on the next send opportunity (observed: one stale-identity Alive from
+the new address, then the new identity about 50 ms later, the §4.1 minimum spacing)
+[B]. A remote peer that hears the stale Alive records an entry for the old NodeId that
+receives no further refreshes and lapses by ttl. While it lasts, the remote peer counts
+one peer too many (observed: a remote count of 2 for about 6 s after an address change
+on a host with one peer) [B].
+
+- An implementation SHOULD carry out any reset caused by a scan's closures before it
+  announces the gateways opened by that scan, so that the first Alive on a new
+  gateway already carries the post-reset NodeId and session [N].
+- Receivers MUST tolerate the reference ordering. The stale entry is an ordinary peer
+  entry that expires under §7 [N].
+
+### 9.6 Worked timeline: an interface goes away and comes back
+
+Host A and host B share a session over one LAN interface each. B's interface goes
+away at time 0 (it loses its address, its link drops, or the host moves to another
+network), and later comes back. Scan phases are arbitrary, so the times shown are
+upper bounds.
+
+| Time | On B (interface lost) | On A (remote) |
+|---|---|---|
+| 0 | the gateway stays open; its sends fail silently | entry for B still valid |
+| ≤ 5 s (B's next scan) | the gateway closes. Its ByeBye cannot be sent. A's entry is removed, and if A was B's last session member, **B founds a fresh session (new NodeId)** | — |
+| last Alive from B + ttl … + 1 s | — | the entry for B lapses. If B was A's last session member, **A founds a fresh session as well** |
+| interface back, ≤ 5 s later (B's next scan) | a gateway opens and announces at once, under B's new NodeId if a reset happened, otherwise under the old one | hears B. The two sessions then meet and merge by Chapter 2 §7.1–§7.2 |
+
+Observed with reference peers on both hosts and B's link held down for 7 s (longer
+than one scan period): B came back under a new NodeId with its own session, A had
+meanwhile also refounded, and the two re-merged within one Alive round of B's
+return [B]. With the link held down for 3 s (shorter than the scan period and the
+ttl), nothing changed (§9.3).
+
+The same sequence covers a host that **moves to another network**. The old address's
+gateway closes and the new address's gateway opens in one scan (§9.3). Peers learned
+on the old network are removed with the old gateway (§9.4), so the host either refounds
+or keeps a session it shares with peers on another gateway. The host then discovers
+and merges with whatever session the new network carries.

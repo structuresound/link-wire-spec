@@ -29,8 +29,8 @@ source) and implementers (who must not).
 | Chapter | Scope | Status |
 |---|---|---|
 | [spec/00-overview.md](spec/00-overview.md) | Terminology, transport model, common serialization rules | v0.4.0 |
-| [spec/01-discovery.md](spec/01-discovery.md) | Multicast peer discovery, peer state gossip | v0.4.0 |
-| [spec/02-sync.md](spec/02-sync.md) | Timeline, tempo, clock measurement, start/stop sync | v0.4.1 |
+| [spec/01-discovery.md](spec/01-discovery.md) | Multicast peer discovery, peer state gossip, gateway lifecycle | v0.5.1 |
+| [spec/02-sync.md](spec/02-sync.md) | Timeline, tempo, clock measurement, start/stop sync | v0.5.1 |
 | [spec/03-audio.md](spec/03-audio.md) | LinkAudio v1: channels, sinks/sources, audio buffers, beat-time alignment | v0.4.3 |
 | [spec/proposals/](spec/proposals/) | Forward-looking design studies (non-normative), e.g. [tactus-native-audio](spec/proposals/tactus-native-audio.md) | draft |
 | [vectors/](vectors/) | Captured packet traces (golden test vectors) with auto-generated observed-fact manifests | v0.1.0 (re-validated at v0.4.0) |

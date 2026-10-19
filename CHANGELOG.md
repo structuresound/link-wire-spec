@@ -3,6 +3,72 @@
 All notable changes to this specification. Every entry records the upstream
 pin (`Ableton/link` commit) the spec describes at that version.
 
+## [0.5.1] — 2026-10-19
+
+Upstream pin: `902aef95bf94af49746fdda5369b42cdcfa1e6d2` — unchanged.
+
+Gateway-lifecycle release. Resolves link-wire-spec#9: when gateways are added and
+dropped, which addresses are admitted, whether a scan-driven close sends ByeBye, and
+what happens to peers learned through an interface that has gone away. No wire
+format changes. All additions are behavioural ([B]) facts or normative ([N])
+guidance. Nothing is retracted.
+
+### Added
+
+- **Chapter 1 §9 "Gateway lifecycle"**:
+  - §9.1: a gateway is keyed by local address. Several addresses on one interface
+    give several gateways, and no two gateways share an address [N].
+  - §9.2: the reference's admission predicate (every IPv4 address on a running
+    interface, nothing else tested: loopback, aliases, `169.254/16`,
+    non-multicast-flag and point-to-point interfaces are all admitted). Admission
+    is local policy: implementations SHOULD admit loopback and MAY admit fewer
+    kinds [N]. Gateways that fail to open are retried on every scan. A failed
+    enumeration closes everything in the reference; implementations MAY keep the
+    current set [N].
+  - §9.3: the gateway set changes only at scans (at enable, then every 5 s), and
+    closures come before openings in a scan. Changes between two scans are
+    invisible. A gateway outlives its address until the next scan, with its sends
+    failing silently. An address change is a close plus an open.
+  - §9.4: closing a gateway sends a ByeBye whatever the cause [B]. Implementations
+    SHOULD do the same, and receivers MUST NOT rely on it [N]. In practice the
+    ByeBye of a scan-driven close rarely reaches the wire, and remotes age the
+    entry out by ttl. The close removes peer and channel entries. Losing the last
+    session member this way triggers the Chapter 2 §7.3 reset, counted over
+    distinct NodeIds across all gateways.
+  - §9.5: in the reference the reset follows the scan, so a gateway opened in the
+    same scan first announces under the pre-reset identity (a ttl-limited phantom
+    peer at the remote). Implementations SHOULD reset before announcing, and
+    receivers MUST tolerate the reference ordering [N].
+  - §9.6: worked timeline for an interface that goes away and returns, and for a
+    host that moves to another network.
+
+### Changed
+
+- Chapter 1 §2 points to §9. §4.3 now states that ByeBye accompanies every gateway
+  close, scan-driven ones included. The §7 table cites §9.3 for "gateway closed
+  locally".
+- Chapter 2 §7.3 names local gateway closure as one way the last session member
+  can disappear.
+- Chapter version stamps: chapters 1 and 2 → 0.5.1.
+
+### Evidence
+
+Runtime experiment with the pinned reference build (`LinkHutSilent`), with no source
+excerpts recorded. Two reference peers ran in separate network namespaces on one
+bridged segment, with captures on both hosts. On one host the address was replaced
+on a link that stayed up, the link was held down for 3 s and then for 7 s, and the
+address was removed outright. A separate single-host run with an alias, a
+`169.254/16` address and an interface without the multicast flag recorded which
+source addresses carried Alives. Verdicts for #9: (1) ByeBye on a scan-driven close
+is attempted but was never observed on the wire after address loss, so remotes age
+out by ttl [B]. (2) Admission is as tabulated in §9.2 [B], and point-to-point
+admission comes from analysis because no running tunnel was available in the rig.
+(3) An address change is a close plus an open, under the same NodeId unless a reset
+intervenes, with the §9.5 ordering [B]. (4) Confirmed: losing the only path to the
+session for longer than one scan resets the session, the peer reappears under a new
+NodeId, and the sessions re-merge [B]. New vectors for these sequences are not yet
+captured.
+
 ## [0.5.0] — 2026-07-06
 
 Upstream pin: `902aef95bf94af49746fdda5369b42cdcfa1e6d2` — unchanged (and not
